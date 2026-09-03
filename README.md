@@ -73,6 +73,12 @@ curl -X POST https://secrets.example/api/requests -H 'Content-Type: application/
 
 The smallest useful request is just `{"secrets": [{}]}`.
 
+Request bodies are validated strictly. Unknown fields are rejected rather than
+ignored, so a misspelled key is an error instead of a silently different
+request, and `type` must be exactly `text` or `file`. Each secret accepts only
+what its type declares: a file uploaded to a text secret is a `400`, and the
+form renders one control per secret accordingly.
+
 ```jsonc
 {
   "submit_url":   "https://secrets.example/e/fwlascooqxofa2ekujikwweq",  // hand this out

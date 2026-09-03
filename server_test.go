@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -161,4 +164,89 @@ func TestManageTokenIsReadOnly(t *testing.T) {
 	if got.Secrets[0].Text != "" {
 		t.Errorf("manage view exposed the draft value %q", got.Secrets[0].Text)
 	}
+}
+
+// The creator declares what each secret is. The API must hold them to it: a
+// file accepted onto a text secret is how a request for one token came back
+// with an unrelated file attached.
+func TestSecretTypeIsEnforced(t *testing.T) {
+	s := testServer(t)
+	h := s.Handler()
+	e := &Entry{
+		Kind: KindRequest, Title: "t",
+		Secrets:    []Secret{{Name: "tok", Type: TypeText}, {Name: "key", Type: TypeFile}},
+		SubmitID:   NewID(),
+		RetrieveID: NewID(),
+		ManageID:   NewID(),
+		ExpiresAt:  timeNowPlusHour(),
+	}
+	s.store.Put(e)
+	base := "/api/e/" + e.SubmitID
+
+	// Text onto the text secret: allowed. Text onto the file secret: refused.
+	if code := do(h, "PUT", base+"/text/0", `{"text":"v"}`); code != http.StatusNoContent {
+		t.Errorf("text to a text secret = %d, want 204", code)
+	}
+	if code := do(h, "PUT", base+"/text/1", `{"text":"v"}`); code != http.StatusBadRequest {
+		t.Errorf("text to a file secret = %d, want 400", code)
+	}
+	// A file part onto the text secret must be refused before it is spooled.
+	if code := postFile(h, base+"/files/0"); code != http.StatusBadRequest {
+		t.Errorf("file to a text secret = %d, want 400", code)
+	}
+	if code := postFile(h, base+"/files/1"); code != http.StatusOK {
+		t.Errorf("file to a file secret = %d, want 200", code)
+	}
+}
+
+func TestCreateRejectsBadSchema(t *testing.T) {
+	h := testServer(t).Handler()
+	for name, body := range map[string]string{
+		"unknown top-level field": `{"secrets":[{}],"ttlx":"1h"}`,
+		"unknown secret field":    `{"secrets":[{"kind":"text"}]}`,
+		"misspelled secrets key":  `{"secret":[{}]}`,
+		"bad secret type":         `{"secrets":[{"type":"flie"}]}`,
+		"trailing content":        `{"secrets":[{}]}{"secrets":[{}]}`,
+		"title too long":          `{"secrets":[{}],"title":"` + strings.Repeat("x", 201) + `"}`,
+		"name too long":           `{"secrets":[{"name":"` + strings.Repeat("x", 201) + `"}]}`,
+		"no secrets":              `{"secrets":[]}`,
+		"not an object":           `["secrets"]`,
+	} {
+		if code := do(h, "POST", "/api/requests", body); code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", name, code)
+		}
+	}
+	// The shapes that must still work.
+	for name, body := range map[string]string{
+		"bare minimum":    `{"secrets":[{}]}`,
+		"explicit text":   `{"secrets":[{"type":"text"}]}`,
+		"explicit file":   `{"secrets":[{"type":"file"}]}`,
+		"every field set": `{"title":"t","description":"d","ttl":"1h","secrets":[{"name":"n","description":"d","type":"file"}]}`,
+	} {
+		if code := do(h, "POST", "/api/requests", body); code != http.StatusCreated {
+			t.Errorf("%s: status %d, want 201", name, code)
+		}
+	}
+}
+
+func do(h http.Handler, method, path, body string) int {
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec.Code
+}
+
+func postFile(h http.Handler, path string) int {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	w, _ := mw.CreateFormFile("file", "k.pem")
+	w.Write([]byte("data"))
+	mw.Close()
+
+	r := httptest.NewRequest("POST", path, &buf)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec.Code
 }

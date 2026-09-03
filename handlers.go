@@ -10,7 +10,19 @@ import (
 	"time"
 )
 
-const maxRequestBody = 64 << 10
+const (
+	maxRequestBody      = 64 << 10
+	maxTitleBytes       = 200
+	maxNameBytes        = 200
+	maxDescriptionBytes = 4 << 10
+)
+
+func checkLen(field, value string, max int) error {
+	if len(value) > max {
+		return errorf(http.StatusBadRequest, "%s exceeds %d bytes", field, max)
+	}
+	return nil
+}
 
 func (s *server) getConfig(w http.ResponseWriter, r *http.Request) error {
 	writeJSON(w, http.StatusOK, s.cfg.configResponse())
@@ -54,7 +66,7 @@ func (s *server) viewEntry(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *server) setText(w http.ResponseWriter, r *http.Request) error {
-	e, idx, err := s.draftTarget(r)
+	e, idx, err := s.draftTarget(r, TypeText)
 	if err != nil {
 		return err
 	}
@@ -73,7 +85,7 @@ func (s *server) setText(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *server) addFile(w http.ResponseWriter, r *http.Request) error {
-	e, idx, err := s.draftTarget(r)
+	e, idx, err := s.draftTarget(r, TypeFile)
 	if err != nil {
 		return err
 	}
@@ -103,7 +115,7 @@ func (s *server) addFile(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *server) dropFile(w http.ResponseWriter, r *http.Request) error {
-	e, idx, err := s.draftTarget(r)
+	e, idx, err := s.draftTarget(r, TypeFile)
 	if err != nil {
 		return err
 	}
@@ -195,8 +207,9 @@ func (s *server) entryAs(r *http.Request, want role) (*Entry, error) {
 }
 
 // draftTarget resolves the preconditions every draft-editing route shares: a
-// valid submit token, an unsubmitted entry, and an in-range secret index.
-func (s *server) draftTarget(r *http.Request) (*Entry, int, error) {
+// valid submit token, an unsubmitted entry, an in-range secret index, and a
+// secret whose declared type matches the route being used.
+func (s *server) draftTarget(r *http.Request, want SecretType) (*Entry, int, error) {
 	e, err := s.entryAs(r, roleSubmit)
 	if err != nil {
 		return nil, 0, err
@@ -207,6 +220,12 @@ func (s *server) draftTarget(r *http.Request) (*Entry, int, error) {
 	idx, err := strconv.Atoi(r.PathValue("idx"))
 	if err != nil || idx < 0 || idx >= len(e.Secrets) {
 		return nil, 0, errorf(http.StatusBadRequest, "bad secret index")
+	}
+	// The creator said what each secret is. Honour that: a file uploaded to a
+	// text secret, or vice versa, is not what the requester asked for.
+	if got := e.Secrets[idx].Type; want != "" && got != want {
+		return nil, 0, errorf(http.StatusBadRequest,
+			"secret %q is a %s secret, not %s", e.Secrets[idx].Name, got, want)
 	}
 	return e, idx, nil
 }
@@ -227,6 +246,12 @@ func (s *server) newEntry(kind Kind, req CreateRequest) (*Entry, error) {
 		return nil, errorf(http.StatusBadRequest, "%v", err)
 	}
 
+	if err := checkLen("title", req.Title, maxTitleBytes); err != nil {
+		return nil, err
+	}
+	if err := checkLen("description", req.Description, maxDescriptionBytes); err != nil {
+		return nil, err
+	}
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
 		title = generatedName()
@@ -241,22 +266,45 @@ func (s *server) newEntry(kind Kind, req CreateRequest) (*Entry, error) {
 		ExpiresAt:   time.Now().Add(ttl),
 	}
 	for i, spec := range req.Secrets {
+		if err := checkLen(fmt.Sprintf("secrets[%d].name", i), spec.Name, maxNameBytes); err != nil {
+			return nil, err
+		}
+		if err := checkLen(fmt.Sprintf("secrets[%d].description", i), spec.Description, maxDescriptionBytes); err != nil {
+			return nil, err
+		}
+		// An unrecognised type is rejected rather than quietly treated as text:
+		// a typo would otherwise change what the form asks for.
+		typ := spec.Type
+		switch typ {
+		case "":
+			typ = TypeText
+		case TypeText, TypeFile:
+		default:
+			return nil, errorf(http.StatusBadRequest,
+				"secrets[%d].type %q must be %q or %q", i, typ, TypeText, TypeFile)
+		}
 		name := strings.TrimSpace(spec.Name)
 		if name == "" {
 			name = fmt.Sprintf("secret-%d", i+1)
-		}
-		typ := spec.Type
-		if typ != TypeFile {
-			typ = TypeText
 		}
 		e.Secrets = append(e.Secrets, Secret{Name: name, Description: spec.Description, Type: typ})
 	}
 	return e, nil
 }
 
+// decodeJSON is strict on purpose: unknown fields are rejected rather than
+// ignored, so a caller that misspells "secrets" or sends a field this version
+// does not understand is told, instead of silently getting a different request
+// from the one it wrote.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody)).Decode(v); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		return errorf(http.StatusBadRequest, "invalid JSON: %v", err)
+	}
+	// A second value means the body was not a single JSON object.
+	if dec.More() {
+		return errorf(http.StatusBadRequest, "invalid JSON: unexpected trailing content")
 	}
 	return nil
 }

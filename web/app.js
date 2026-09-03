@@ -389,7 +389,50 @@ function submitForm(id, e) {
       status.classList.toggle('ok', !!ok);
     };
 
-    if (sec.type !== 'file') {
+    // Render exactly the control the creator asked for. Offering a file box
+    // on a text secret (and accepting it) is how a request for a token came
+    // back as a token and an unrelated file.
+    if (sec.type === 'file') {
+      body.append(
+        el(`<label class="drop">Attach files<input type="file" data-file multiple></label>
+            <div class="item-group" data-list></div>`)
+      );
+      const list = body.querySelector('[data-list]');
+
+      const drawFiles = (names) =>
+        list.replaceChildren(
+          ...names.map((n, j) => {
+            const li = el(`<article class="item" data-variant="outline" data-size="sm">
+                <section><h3>${esc(n)}</h3></section>
+                <aside><button type="button" class="btn" data-variant="ghost" data-size="icon-sm" aria-label="Remove">&times;</button></aside>
+              </article>`);
+            li.querySelector('button').addEventListener('click', async () => {
+              await api('DELETE', `/api/e/${id}/files/${i}/${j}`);
+              drawFiles((await api('GET', `/api/e/${id}`)).secrets[i].files || []);
+            });
+            return li;
+          })
+        );
+      drawFiles(sec.files || []);
+
+      body.querySelector('[data-file]').addEventListener('change', async (ev) => {
+        const input = ev.target;
+        for (const f of input.files) {
+          setStatus(`uploading ${f.name}…`);
+          const fd = new FormData();
+          fd.append('file', f, f.name);
+          try {
+            await api('POST', `/api/e/${id}/files/${i}`, fd);
+          } catch (err) {
+            setStatus(err.message);
+            return;
+          }
+        }
+        input.value = '';
+        setStatus('saved', true);
+        drawFiles((await api('GET', `/api/e/${id}`)).secrets[i].files || []);
+      });
+    } else {
       const ta = el(`<textarea class="textarea mono" placeholder="paste the secret"></textarea>`);
       ta.value = sec.text || '';
       body.append(ta);
@@ -409,46 +452,6 @@ function submitForm(id, e) {
         }, 400);
       });
     }
-
-    body.append(
-      el(`<label class="drop">Attach files<input type="file" data-file multiple></label>
-          <div class="item-group" data-list></div>`)
-    );
-    const list = body.querySelector('[data-list]');
-
-    const drawFiles = (names) =>
-      list.replaceChildren(
-        ...names.map((n, j) => {
-          const li = el(`<article class="item" data-variant="outline" data-size="sm">
-              <section><h3>${esc(n)}</h3></section>
-              <aside><button type="button" class="btn" data-variant="ghost" data-size="icon-sm" aria-label="Remove">&times;</button></aside>
-            </article>`);
-          li.querySelector('button').addEventListener('click', async () => {
-            await api('DELETE', `/api/e/${id}/files/${i}/${j}`);
-            drawFiles((await api('GET', `/api/e/${id}`)).secrets[i].files || []);
-          });
-          return li;
-        })
-      );
-    drawFiles(sec.files || []);
-
-    body.querySelector('[data-file]').addEventListener('change', async (ev) => {
-      const input = ev.target;
-      for (const f of input.files) {
-        setStatus(`uploading ${f.name}…`);
-        const fd = new FormData();
-        fd.append('file', f, f.name);
-        try {
-          await api('POST', `/api/e/${id}/files/${i}`, fd);
-        } catch (err) {
-          setStatus(err.message);
-          return;
-        }
-      }
-      input.value = '';
-      setStatus('saved', true);
-      drawFiles((await api('GET', `/api/e/${id}`)).secrets[i].files || []);
-    });
 
     rows.append(row);
   });
