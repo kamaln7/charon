@@ -5,7 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <title>charon</title>
+<!-- Basecoat 1.0.2, vendored rather than hotlinked: this service is meant to
+     run where there may be no route to a CDN. Standalone build, so there is no
+     Tailwind step and no npm. -->
+<link rel="stylesheet" href="/basecoat.css">
 <link rel="stylesheet" href="/style.css">
+<!-- A separate file, not inline: the CSP is script-src 'self', and loosening
+     it with 'unsafe-inline' to save one request would be the wrong trade on a
+     page that displays secrets. -->
+<script src="/theme.js"></script>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>

@@ -248,8 +248,21 @@ go test ./...
 go run .
 ```
 
-The frontend is three static files under `web/`, embedded with `//go:embed`.
-No build step, no bundler, no dependencies.
+The frontend is static files under `web/`, embedded with `//go:embed`. No build
+step, no bundler, no npm.
+
+Styling is [Basecoat](https://basecoatui.com) 1.0.2, vendored as
+`web/basecoat.css` — the standalone CDN build, which has Tailwind already
+compiled in. It is copied into the repo rather than hotlinked so the UI works on
+a network with no route to a CDN. Two things to know if you touch it:
+
+- **The bundle ships Basecoat's component classes only, not Tailwind's
+  utilities.** `w-full`, `text-sm` and friends do not exist; anything
+  utility-shaped lives in `style.css`.
+- **Dark mode keys off `html.dark`, not `prefers-color-scheme`**, so `theme.js`
+  wires the media query up by hand. It is a separate file because the CSP is
+  `script-src 'self'` and loosening that for one inline script would be the
+  wrong trade on a page that displays secrets.
 
 | File | Holds |
 |---|---|

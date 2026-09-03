@@ -1,49 +1,6 @@
-:root {
-  color-scheme: light dark;
-  --bg: #fcfcfb;
-  --panel: #ffffff;
-  --sunken: #f4f4f2;
-  --ink: #14161a;
-  --ink-soft: #5b6270;
-  --muted: #8b929e;
-  --line: #e6e6e4;
-  --line-strong: #d3d4d2;
-  --accent: #2f5fe0;
-  --accent-soft: #eaf0ff;
-  --accent-ink: #ffffff;
-  --danger: #b42318;
-  --ok: #0a7a4a;
-  --r: 12px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1013;
-    --panel: #17191e;
-    --sunken: #1d2027;
-    --ink: #eceef2;
-    --ink-soft: #a6adba;
-    --muted: #79808d;
-    --line: #272a31;
-    --line-strong: #363a43;
-    --accent: #7d97ff;
-    --accent-soft: #1c2338;
-    --accent-ink: #0f1013;
-    --danger: #ff9b90;
-    --ok: #57d9a0;
-  }
-}
-
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--ink);
-  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -webkit-text-size-adjust: 100%;
-}
+/* Layout, plus the few pieces Basecoat does not cover. Everything else —
+   buttons, cards, inputs, labels, badges, colour tokens, dark mode — comes
+   from basecoat.css. */
 
 main {
   max-width: 32rem;
@@ -51,7 +8,8 @@ main {
   padding: 2rem 1.15rem calc(4rem + env(safe-area-inset-bottom));
 }
 
-/* ---------- typography ---------- */
+section { margin-top: 2.25rem; }
+.stack > * + * { margin-top: 1.15rem; }
 
 h1 {
   font-size: 1.45rem;
@@ -61,224 +19,70 @@ h1 {
   margin: 0;
 }
 
-.lede {
-  color: var(--ink-soft);
-  margin: .35rem 0 0;
-}
+.lede { color: var(--muted-foreground); margin: .35rem 0 0; }
+.note { font-size: .8rem; color: var(--muted-foreground); margin: .55rem 0 0; }
+.note a, .md a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.hint { font-weight: 400; color: var(--muted-foreground); }
 
-/* A small uppercase rubric that opens each major block. Carries the hierarchy
-   so the sections need no boxes or rules to separate them. */
+/* A small uppercase rubric opens each block, so the sections need no boxes or
+   rules to separate them. */
 .rubric {
   font-size: .7rem;
   font-weight: 680;
   letter-spacing: .09em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--muted-foreground);
   margin: 0 0 .85rem;
 }
 
-label {
-  display: block;
-  font-size: .8rem;
-  font-weight: 580;
-  margin-bottom: .4rem;
-}
-
-.hint { font-weight: 400; color: var(--muted); }
-
-section { margin-top: 2.25rem; }
-
-.md { font-size: .9rem; color: var(--ink-soft); }
+.md { font-size: .9rem; color: var(--muted-foreground); }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md code, code {
-  font: .85em ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: var(--sunken);
-  padding: .12em .38em;
-  border-radius: 5px;
-}
-.md pre { overflow-x: auto; padding: .75rem; background: var(--sunken); border-radius: 9px; }
-.md pre code { background: none; padding: 0; }
-.md a, a { color: var(--accent); }
+.md pre { overflow-x: auto; padding: .75rem; background: var(--muted); border-radius: .5rem; }
 
-/* ---------- controls ---------- */
+/* ---------- mode picker ---------- */
 
-input[type="text"], textarea {
-  width: 100%;
-  padding: .62rem .75rem;
-  font: inherit;
-  color: var(--ink);
-  background: var(--panel);
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  transition: border-color .12s ease, box-shadow .12s ease;
-}
-input[type="text"]::placeholder, textarea::placeholder { color: var(--muted); }
-input[type="text"]:focus, textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-textarea {
-  min-height: 5rem;
-  resize: vertical;
-}
-
-/* Only secret values are monospace. Descriptions are prose and read badly in
-   a code face. */
-textarea.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: .875rem;
-}
-
-button { font: inherit; cursor: pointer; }
-
-.primary {
-  width: 100%;
-  padding: .8rem;
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: var(--accent);
-  border: none;
-  border-radius: 10px;
-}
-.primary:disabled { opacity: .45; cursor: default; }
-
-/* A quiet outlined button. Used for every additive action so "add" never
-   competes visually with the one real submit. */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: .4rem;
-  padding: .45rem .8rem;
-  font-size: .875rem;
-  font-weight: 520;
-  color: var(--ink);
-  background: var(--panel);
-  border: 1px solid var(--line-strong);
-  border-radius: 9px;
-}
-.chip:hover { border-color: var(--accent); color: var(--accent); }
-
-.linky {
-  padding: 0;
-  font-size: .82rem;
-  font-weight: 500;
-  color: var(--accent);
-  background: none;
-  border: none;
-}
-.linky:hover { text-decoration: underline; }
-
-.remove {
-  padding: .15rem .3rem;
-  font-size: .78rem;
-  color: var(--muted);
-  background: none;
-  border: none;
-}
-.remove:hover { color: var(--danger); }
-
-/* ---------- nav ---------- */
-
-.nav {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: .5rem;
-  margin: 1.75rem 0 0;
-}
-.nav button {
-  padding: .95rem .6rem;
-  text-align: left;
-  background: var(--panel);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r);
-  transition: border-color .12s ease, background .12s ease;
-}
-.nav button:hover { border-color: var(--accent); }
-.nav button[aria-selected="true"] {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.nav .t { display: block; font-weight: 600; font-size: .95rem; color: var(--ink); }
-.nav .d { display: block; font-size: .78rem; color: var(--ink-soft); margin-top: .12rem; }
+.nav { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: 1.75rem; }
+.nav .card { padding: .95rem .8rem; text-align: left; cursor: pointer; gap: 0; }
+.nav .card[aria-selected="true"] { border-color: var(--primary); background: var(--accent); }
+.nav .t { display: block; font-weight: 600; font-size: .95rem; }
+.nav .d { display: block; font-size: .78rem; color: var(--muted-foreground); margin-top: .12rem; }
 
 /* ---------- expiry radio group ---------- */
 
-.segmented {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .4rem;
-}
-.segmented button {
-  flex: 1 0 auto;
-  min-width: 3.6rem;
-  padding: .5rem .35rem;
-  font-size: .85rem;
-  font-weight: 520;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-soft);
-  background: var(--panel);
-  border: 1px solid var(--line-strong);
-  border-radius: 9px;
-}
-.segmented button[aria-checked="true"] {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  font-weight: 620;
-}
+/* Not Basecoat's .button-group: that is inline-flex at fit-content and joins
+   edges, which breaks once six options have to wrap on a phone. */
+.segmented { display: flex; flex-wrap: wrap; gap: .4rem; }
+.segmented .btn { flex: 1 0 auto; min-width: 3.6rem; font-variant-numeric: tabular-nums; }
+
+/* The standalone Basecoat bundle ships its own component classes only — no
+   Tailwind utilities — so anything utility-shaped has to live here. */
+.btn-block { width: 100%; }
+.item aside.size { font-size: .8rem; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
+/* Basecoat's .item wraps by default, which pushes a one-line filename onto a
+   second row underneath its own action. */
+.item-group .item { flex-wrap: nowrap; }
+.item-group .item > section { min-width: 0; }
+.item-group .item h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- secret rows ---------- */
 
-.row {
-  position: relative;
-  padding: .95rem;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  margin-bottom: .6rem;
-}
-.row-head {
-  display: flex;
-  align-items: center;
-  gap: .5rem;
-  margin-bottom: .6rem;
-}
-.row-head input[type="text"] {
+.adders { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
+.adders .lbl { font-size: .82rem; color: var(--muted-foreground); }
+
+.row { padding: .95rem; margin-bottom: .6rem; gap: 0; }
+.row-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; }
+/* The name reads as a heading until you touch it, so an untouched row does not
+   look like an unfinished form. */
+.row-head .input {
   flex: 1;
-  padding: .3rem .45rem;
   font-weight: 560;
-  font-size: .875rem;
   background: transparent;
   border-color: transparent;
 }
-.row-head input[type="text"]:hover { border-color: var(--line-strong); }
+.row-head .input:hover { border-color: var(--border); }
 
-.badge {
-  flex: none;
-  padding: .16rem .45rem;
-  font-size: .68rem;
-  font-weight: 660;
-  letter-spacing: .05em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-  background: var(--sunken);
-  border-radius: 5px;
-}
-
-.empty {
-  padding: 1.5rem 1rem;
-  text-align: center;
-  font-size: .875rem;
-  color: var(--muted);
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--r);
-  margin-bottom: .75rem;
-}
-
-.adders { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
-.adders .lbl { font-size: .82rem; color: var(--ink-soft); }
+.empty { margin-bottom: .75rem; }
 
 /* ---------- files ---------- */
 
@@ -287,43 +91,24 @@ button { font: inherit; cursor: pointer; }
   padding: .7rem;
   text-align: center;
   font-size: .85rem;
-  color: var(--ink-soft);
-  background: var(--sunken);
-  border: 1px dashed var(--line-strong);
-  border-radius: 9px;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: .5rem;
+  cursor: pointer;
 }
-.drop:hover { border-color: var(--accent); color: var(--accent); }
+.drop:hover { border-color: var(--primary); color: var(--foreground); }
 .drop input { display: none; }
 
-.files { list-style: none; margin: .5rem 0 0; padding: 0; }
-.files li {
-  display: flex;
-  align-items: center;
-  gap: .5rem;
-  padding: .4rem .55rem;
-  font-size: .85rem;
-  background: var(--sunken);
-  border-radius: 8px;
-  margin-bottom: .3rem;
-}
-.files .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.files .size { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .8rem; }
 
-/* ---------- result / reveal ---------- */
+/* ---------- links and reveal ---------- */
 
-.card {
-  padding: .95rem;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  margin-bottom: .75rem;
-}
-.card.keep { border-color: var(--accent); background: var(--accent-soft); }
+.card { gap: 0; }
+.card.keep { border-color: var(--primary); background: var(--accent); }
+.card-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
 
-.card-head { display: flex; align-items: center; gap: .5rem; }
-
-/* Both circles share one colour: they are two steps of the same instruction,
-   not two different kinds of thing. */
+/* Both circles share one colour: two steps of the same instruction, not two
+   different kinds of thing. */
 .step {
   flex: none;
   display: inline-flex;
@@ -332,20 +117,14 @@ button { font: inherit; cursor: pointer; }
   width: 1.4rem;
   height: 1.4rem;
   border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-ink);
+  background: var(--primary);
+  color: var(--primary-foreground);
   font-size: .75rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-.linkbox { display: flex; gap: .4rem; }
-.linkbox input {
-  font-size: .78rem;
-  font-family: ui-monospace, monospace;
-  padding: .5rem .6rem;
-}
-.linkbox button { flex: none; }
+.input-group input[readonly] { font-size: .78rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .value {
   margin: 0;
@@ -353,16 +132,14 @@ button { font: inherit; cursor: pointer; }
   font: .85rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre-wrap;
   word-break: break-all;
-  background: var(--sunken);
-  border-radius: 8px;
+  background: var(--muted);
+  border-radius: .5rem;
 }
 
-.note { font-size: .8rem; color: var(--muted); margin: .55rem 0 0; }
-.error { color: var(--danger); font-size: .875rem; margin: .6rem 0 0; }
-.status { font-size: .72rem; font-weight: 400; color: var(--muted); }
-.status.ok { color: var(--ok); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .875rem; }
+
+.status { font-size: .72rem; color: var(--muted-foreground); }
+.status.ok { color: var(--primary); }
 
 .center { text-align: center; padding: 3.5rem 0; }
 .center h1 { margin-bottom: .4rem; }
-
-.stack > * + * { margin-top: 1.15rem; }

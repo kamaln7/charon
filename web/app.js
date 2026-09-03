@@ -57,13 +57,13 @@ const fatal = (msg) => show(el(`<div class="center"><h1>Nothing here</h1><p clas
 // and usually unused, so they should not take up room until asked for.
 function collapsible(buttonText, labelText, placeholder) {
   const wrap = el(`<div>
-      <button type="button" class="linky">+ ${esc(buttonText)}</button>
-      <div hidden>
+      <button type="button" class="btn" data-variant="link" data-size="sm">+ ${esc(buttonText)}</button>
+      <div role="group" class="field" hidden>
         <label>${esc(labelText)} <span class="hint">markdown</span></label>
         <textarea placeholder="${esc(placeholder)}"></textarea>
       </div>
     </div>`);
-  const [btn, body] = [wrap.querySelector('button'), wrap.querySelector('div')];
+  const [btn, body] = [wrap.querySelector('button'), wrap.querySelector('.field')];
   btn.addEventListener('click', () => {
     body.hidden = false;
     btn.hidden = true;
@@ -83,10 +83,10 @@ function home() {
       <h1>charon</h1>
       <p class="lede">One-way delivery. Nothing is written to disk, nothing survives a restart.</p>
       <div class="nav" role="tablist">
-        <button role="tab" data-mode="request" aria-selected="true">
+        <button type="button" class="card" role="tab" data-mode="request" aria-selected="true">
           <span class="t">Request</span><span class="d">Ask someone for secrets</span>
         </button>
-        <button role="tab" data-mode="send" aria-selected="false">
+        <button type="button" class="card" role="tab" data-mode="send" aria-selected="false">
           <span class="t">Send</span><span class="d">Hand over your own</span>
         </button>
       </div>
@@ -116,7 +116,7 @@ function builder(form, mode) {
     <div>
       <section>
         <div class="stack">
-          <div>
+          <div role="group" class="field">
             <label for="title">${requesting ? 'Request name' : 'Secret name'} <span class="hint">optional</span></label>
             <input type="text" id="title" placeholder="a name is generated if you skip this"
                    autocomplete="off" autocapitalize="sentences">
@@ -129,20 +129,20 @@ function builder(form, mode) {
         <p class="rubric">Secrets</p>
         <div class="adders">
           <span class="lbl">Add:</span>
-          <button type="button" class="chip" data-add="text">Text</button>
-          <button type="button" class="chip" data-add="file">File</button>
+          <button type="button" class="btn" data-variant="outline" data-size="sm" data-add="text">Text</button>
+          <button type="button" class="btn" data-variant="outline" data-size="sm" data-add="file">File</button>
         </div>
         <div id="rows"></div>
       </section>
 
       <section>
         <p class="rubric">Expires after</p>
-        <div class="segmented" id="ttl" role="radiogroup"></div>
+        <div class="segmented" id="ttl" role="radiogroup" aria-label="Expires after"></div>
       </section>
 
       <section>
-        <button type="submit" class="primary">${requesting ? 'Create request link' : 'Create secret link'}</button>
-        <p class="error" id="err" hidden></p>
+        <button type="submit" class="btn btn-block">${requesting ? 'Create request link' : 'Create secret link'}</button>
+        <div class="alert" data-variant="destructive" id="err" hidden><p></p></div>
       </section>
     </div>`);
   form.replaceChildren(view);
@@ -160,7 +160,8 @@ function builder(form, mode) {
   const drawTTL = () =>
     ttlBox.replaceChildren(
       ...(cfg.ttl_options || ['1d']).map((o) => {
-        const b = el(`<button type="button" role="radio" aria-checked="${o === ttl}">${esc(ttlLabel(o))}</button>`);
+        const b = el(`<button type="button" class="btn" data-size="sm" role="radio"
+            data-variant="${o === ttl ? 'secondary' : 'outline'}" aria-checked="${o === ttl}">${esc(ttlLabel(o))}</button>`);
         b.addEventListener('click', () => {
           ttl = o;
           drawTTL();
@@ -173,7 +174,12 @@ function builder(form, mode) {
   // Secrets start empty: the two Add buttons are the instruction, so there is
   // no half-filled row to explain or delete.
   const rows = view.querySelector('#rows');
-  const empty = el(`<div class="empty">No secrets yet — add a text value or a file below.</div>`);
+  const empty = el(`<section class="empty">
+      <header>
+        <h3>No secrets yet</h3>
+        <p>Add a text value or a file using the buttons above.</p>
+      </header>
+    </section>`);
   rows.append(empty);
 
   const renumber = () =>
@@ -184,11 +190,12 @@ function builder(form, mode) {
   const addRow = (type) => {
     empty.remove();
     const row = el(`
-      <div class="row" data-type="${type}">
+      <div class="card row" data-type="${type}">
         <div class="row-head">
-          <input type="text" data-name placeholder="secret-1" autocomplete="off" autocapitalize="off" spellcheck="false">
-          <span class="badge">${type}</span>
-          <button type="button" class="remove" title="Remove">&times;</button>
+          <input type="text" class="input" data-name placeholder="secret-1" aria-label="Secret name"
+                 autocomplete="off" autocapitalize="off" spellcheck="false">
+          <span class="badge" data-variant="secondary">${type}</span>
+          <button type="button" class="btn" data-variant="ghost" data-size="icon-sm" title="Remove">&times;</button>
         </div>
         <div data-body></div>
       </div>`);
@@ -199,26 +206,29 @@ function builder(form, mode) {
       body.append(d);
       row.value = () => ({ description: d.value() });
     } else if (type === 'text') {
-      body.append(el(`<textarea class="mono" data-value placeholder="paste the secret"></textarea>`));
+      body.append(el(`<textarea class="textarea mono" data-value placeholder="paste the secret"></textarea>`));
       row.value = () => ({ text: body.querySelector('[data-value]').value });
     } else {
       body.append(
         el(`<label class="drop">Choose files<input type="file" data-files multiple></label>
-            <ul class="files" data-list></ul>`)
+            <div class="item-group" data-list></div>`)
       );
       const input = body.querySelector('[data-files]');
       const list = body.querySelector('[data-list]');
       input.addEventListener('change', () => {
         list.replaceChildren(
           ...[...input.files].map((f) =>
-            el(`<li><span class="name">${esc(f.name)}</span><span class="size">${bytes(f.size)}</span></li>`)
+            el(`<article class="item" data-variant="outline" data-size="sm">
+                  <section><h3>${esc(f.name)}</h3></section>
+                  <aside class="size">${bytes(f.size)}</aside>
+                </article>`)
           )
         );
       });
       row.value = () => ({ files: [...input.files] });
     }
 
-    row.querySelector('.remove').addEventListener('click', () => {
+    row.querySelector('[title=Remove]').addEventListener('click', () => {
       row.remove();
       if (!rows.querySelector('.row')) rows.append(empty);
       renumber();
@@ -235,13 +245,13 @@ function builder(form, mode) {
 
   form.onsubmit = async (ev) => {
     ev.preventDefault();
-    const btn = view.querySelector('.primary');
+    const btn = view.querySelector('button[type=submit]');
     const err = view.querySelector('#err');
     const rowEls = [...rows.querySelectorAll('.row')];
 
     err.hidden = true;
     if (!rowEls.length) {
-      err.textContent = 'Add at least one secret.';
+      err.querySelector('p').textContent = 'Add at least one secret.';
       err.hidden = false;
       return;
     }
@@ -276,7 +286,7 @@ function builder(form, mode) {
       await api('POST', `/api/e/${id}/submit`);
       location.assign(created.manage_url);
     } catch (e) {
-      err.textContent = e.message;
+      err.querySelector('p').textContent = e.message;
       err.hidden = false;
       btn.disabled = false;
     }
@@ -284,7 +294,7 @@ function builder(form, mode) {
 }
 
 function copyButton(text) {
-  const b = el('<button type="button" class="chip">Copy</button>');
+  const b = el('<button type="button" class="btn" data-variant="ghost" data-size="sm" data-align="end">Copy</button>');
   b.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(text);
@@ -302,10 +312,10 @@ function copyButton(text) {
 function linkCard({ step, label, url, keep, note }) {
   const card = el(`<div class="card${keep ? ' keep' : ''}">
       <label class="card-head">${step ? `<span class="step">${step}</span>` : ''}${esc(label)}</label>
-      <div class="linkbox"><input type="text" readonly value="${esc(url)}"></div>
+      <div class="input-group"><input type="text" readonly value="${esc(url)}"></div>
       ${note ? `<p class="note">${note}</p>` : ''}
     </div>`);
-  card.querySelector('.linkbox').append(copyButton(url));
+  card.querySelector('.input-group').append(copyButton(url));
   card.querySelector('input').addEventListener('focus', (e) => e.target.select());
   return card;
 }
@@ -363,7 +373,7 @@ function submitForm(id, e) {
 
   e.secrets.forEach((sec, i) => {
     const row = el(`
-      <div class="row">
+      <div class="card row">
         <div class="row-head">
           <strong style="flex:1;font-size:.9rem">${esc(sec.name)}</strong>
           <span class="status" data-status></span>
@@ -380,7 +390,7 @@ function submitForm(id, e) {
     };
 
     if (sec.type !== 'file') {
-      const ta = el(`<textarea class="mono" placeholder="paste the secret"></textarea>`);
+      const ta = el(`<textarea class="textarea mono" placeholder="paste the secret"></textarea>`);
       ta.value = sec.text || '';
       body.append(ta);
       // Autosave: the draft exists so Telegram can suspend this webview
@@ -402,14 +412,17 @@ function submitForm(id, e) {
 
     body.append(
       el(`<label class="drop" style="margin-top:.6rem">Attach files<input type="file" data-file multiple></label>
-          <ul class="files" data-list></ul>`)
+          <div class="item-group" data-list></div>`)
     );
     const list = body.querySelector('[data-list]');
 
     const drawFiles = (names) =>
       list.replaceChildren(
         ...names.map((n, j) => {
-          const li = el(`<li><span class="name">${esc(n)}</span><button type="button" class="remove">&times;</button></li>`);
+          const li = el(`<article class="item" data-variant="outline" data-size="sm">
+              <section><h3>${esc(n)}</h3></section>
+              <aside><button type="button" class="btn" data-variant="ghost" data-size="icon-sm" aria-label="Remove">&times;</button></aside>
+            </article>`);
           li.querySelector('button').addEventListener('click', async () => {
             await api('DELETE', `/api/e/${id}/files/${i}/${j}`);
             drawFiles((await api('GET', `/api/e/${id}`)).secrets[i].files || []);
@@ -440,8 +453,8 @@ function submitForm(id, e) {
     rows.append(row);
   });
 
-  const send = el('<button type="submit" class="primary">Submit</button>');
-  const err = el('<p class="error" hidden></p>');
+  const send = el('<button type="submit" class="btn btn-block">Submit</button>');
+  const err = el('<div class="alert" data-variant="destructive" hidden><p></p></div>');
   const footer = el('<section></section>');
   footer.append(send, err);
   form.append(footer);
@@ -455,7 +468,7 @@ function submitForm(id, e) {
       show(el(`<div class="center"><h1>Sent</h1><p class="lede">They can read it once. You can close this.</p></div>`));
       setTimeout(() => tg?.close?.(), 1200);
     } catch (e2) {
-      err.textContent = e2.message;
+      err.querySelector('p').textContent = e2.message;
       err.hidden = false;
       send.disabled = false;
     }
@@ -490,7 +503,7 @@ function retrieveView(id, e) {
       <h1>${esc(e.title)}</h1>
       ${e.description_html ? `<div class="md" style="margin-top:.5rem">${e.description_html}</div>` : ''}
       <p class="lede">Revealing this destroys it ${lingerText()} later.</p>
-      <section><button class="primary" id="reveal">Reveal</button></section>
+      <section><button type="button" class="btn btn-block" id="reveal">Reveal</button></section>
     </div>`);
   view.querySelector('#reveal').addEventListener('click', async (ev) => {
     ev.target.disabled = true;
@@ -513,7 +526,7 @@ function revealed(got) {
   const out = view.querySelector('#out');
 
   for (const sec of got.secrets) {
-    const card = el(`<div class="card"><label>${esc(sec.name)}</label></div>`);
+    const card = el(`<div class="card"><label class="card-head">${esc(sec.name)}</label></div>`);
     if (sec.text) {
       const pre = el('<pre class="value"></pre>');
       pre.textContent = sec.text;
@@ -526,12 +539,15 @@ function revealed(got) {
     }
     if (sec.files?.length) {
       card.append(
-        el(`<ul class="files">${sec.files
+        el(`<div class="item-group">${sec.files
           .map(
             (f) =>
-              `<li><span class="name"><a href="${esc(f.url)}" download>${esc(f.filename)}</a></span><span class="size">${bytes(f.size)}</span></li>`
+              `<a class="item" data-variant="outline" data-size="sm" href="${esc(f.url)}" download>
+                 <section><h3>${esc(f.filename)}</h3></section>
+                 <aside class="size">${bytes(f.size)}</aside>
+               </a>`
           )
-          .join('')}</ul>`)
+          .join('')}</div>`)
       );
     }
     out.append(card);
