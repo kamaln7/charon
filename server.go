@@ -54,6 +54,7 @@ func (s *server) Handler() http.Handler {
 	// /e/<id> is a client-side route, so it serves the app shell rather than a
 	// 404. Everything else falls through to the embedded assets.
 	mux.HandleFunc("GET /e/{id}", s.serveIndex)
+	mux.HandleFunc("GET /manage", s.serveIndex)
 	// No method on this one: a method-qualified "GET /" would conflict with
 	// the method-less "/api/" above, which ServeMux rejects at registration.
 	mux.Handle("/", s.static)

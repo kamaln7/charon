@@ -63,6 +63,7 @@ type Entry struct {
 
 	SubmitID    string
 	RetrieveID  string
+	ManageID    string
 	CallbackURL string
 
 	Fulfilled bool
@@ -92,13 +93,21 @@ type role int
 const (
 	roleSubmit role = iota
 	roleRetrieve
+	// roleManage is the creator's own token. It reads back the other two links
+	// and nothing else — it cannot submit a draft or consume the payload, so
+	// the manage page never has to be trusted with the secret itself.
+	roleManage
 )
 
 func (r role) String() string {
-	if r == roleSubmit {
+	switch r {
+	case roleSubmit:
 		return "submit"
+	case roleRetrieve:
+		return "retrieve"
+	default:
+		return "manage"
 	}
-	return "retrieve"
 }
 
 type ref struct {
@@ -155,6 +164,7 @@ func (s *Store) Put(e *Entry) {
 	defer s.mu.Unlock()
 	s.byID[e.SubmitID] = ref{e, roleSubmit}
 	s.byID[e.RetrieveID] = ref{e, roleRetrieve}
+	s.byID[e.ManageID] = ref{e, roleManage}
 }
 
 func (s *Store) Lookup(id string) (*Entry, role, error) {
@@ -298,6 +308,7 @@ func (s *Store) destroy(e *Entry) []string {
 	defer s.mu.Unlock()
 	delete(s.byID, e.SubmitID)
 	delete(s.byID, e.RetrieveID)
+	delete(s.byID, e.ManageID)
 	var paths []string
 	for _, sec := range e.Secrets {
 		for _, f := range sec.Files {

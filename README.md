@@ -15,9 +15,18 @@ two-word name; an unnamed secret becomes `secret-1`, `secret-2`, and so on;
 descriptions exist only where they help. The one required field is the list of
 secrets itself.
 
-Every entry has two independent tokens: a **submit** token and a **retrieve**
-token. In request mode you hand out the submit link; in send mode you hand out
-the retrieve link. Holding one never grants the other.
+Every entry has three independent tokens:
+
+| Token | Who holds it | What it can do |
+|---|---|---|
+| **submit** | whoever fills the form in | write the draft, submit it once |
+| **retrieve** | whoever reads the payload | consume the secret, once |
+| **manage** | the creator | read back the other two links, nothing else |
+
+Holding one never grants another. In request mode you hand out the submit link;
+in send mode you hand out the retrieve link. Creating either redirects you to
+`/manage?token=…`, which is bookmarkable — a refresh still shows your links
+instead of losing them to page state.
 
 ## Why not yopass
 
@@ -70,6 +79,7 @@ The smallest useful request is just `{"secrets": [{}]}`.
   "retrieve_url": "https://secrets.example/e/po3nkmdgisdb5veespq6hfph",  // keep this
   "telegram_url": "https://t.me/yourbot/secrets?startapp=fwlascoo...",   // if configured
   "poll_url":     "https://secrets.example/api/e/po3nkmdgisdb5veespq6hfph",
+  "manage_url":   "https://secrets.example/manage?token=kwwyvma5t53x4ulperhpuamo",
   "expires_at":   "2026-09-03T14:59:51Z"
 }
 ```
@@ -102,7 +112,7 @@ until the entry self-destructs — an agent should not be handed a base64 blob.
 |---|---|
 | `POST /api/requests` | Create a request (you receive the answer) |
 | `POST /api/secrets` | Create a send (you provide the content) |
-| `GET /api/e/{id}` | View / poll. Returns the draft for a submit token only |
+| `GET /api/e/{id}` | View / poll. Draft values for a submit token, links for a manage token |
 | `PUT /api/e/{id}/text/{idx}` | Autosave one field |
 | `POST /api/e/{id}/files/{idx}` | Upload a file to one secret (multipart) |
 | `DELETE /api/e/{id}/files/{idx}/{n}` | Remove a drafted file |

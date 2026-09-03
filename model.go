@@ -44,7 +44,10 @@ type CreateResponse struct {
 	TelegramURL string `json:"telegram_url,omitempty"`
 	// PollURL is the view endpoint under another name, so a caller reading the
 	// response sees the flow: poll it until fulfilled, then POST RetrieveURL.
-	PollURL   string `json:"poll_url"`
+	PollURL string `json:"poll_url"`
+	// ManageURL carries the owner token. Creation redirects here so the two
+	// links survive a refresh instead of living only in page state.
+	ManageURL string `json:"manage_url"`
 	ExpiresAt string `json:"expires_at"`
 }
 
@@ -59,6 +62,11 @@ type EntryResponse struct {
 	Fulfilled bool             `json:"fulfilled"`
 	Retrieved bool             `json:"retrieved"`
 	ExpiresAt string           `json:"expires_at"`
+
+	// Only populated for the manage role: the links the owner hands out.
+	SubmitURL   string `json:"submit_url,omitempty"`
+	RetrieveURL string `json:"retrieve_url,omitempty"`
+	TelegramURL string `json:"telegram_url,omitempty"`
 }
 
 type SecretResponse struct {
@@ -123,11 +131,12 @@ func (c Config) createResponse(e *Entry) CreateResponse {
 		RetrieveURL: c.BaseURL + "/e/" + e.RetrieveID,
 		TelegramURL: c.Telegram.DirectLink(e.SubmitID),
 		PollURL:     c.BaseURL + "/api/e/" + e.RetrieveID,
+		ManageURL:   c.BaseURL + "/manage?token=" + e.ManageID,
 		ExpiresAt:   rfc3339(e.ExpiresAt),
 	}
 }
 
-func entryResponse(e *Entry, rl role) EntryResponse {
+func (c Config) entryResponse(e *Entry, rl role) EntryResponse {
 	out := EntryResponse{
 		Kind:      e.Kind,
 		Role:      rl.String(),
@@ -137,6 +146,11 @@ func entryResponse(e *Entry, rl role) EntryResponse {
 		Fulfilled: e.Fulfilled,
 		Retrieved: !e.ConsumedAt.IsZero(),
 		ExpiresAt: rfc3339(e.ExpiresAt),
+	}
+	if rl == roleManage {
+		out.SubmitURL = c.BaseURL + "/e/" + e.SubmitID
+		out.RetrieveURL = c.BaseURL + "/e/" + e.RetrieveID
+		out.TelegramURL = c.Telegram.DirectLink(e.SubmitID)
 	}
 	draft := rl == roleSubmit && !e.Fulfilled
 	for _, sec := range e.Secrets {

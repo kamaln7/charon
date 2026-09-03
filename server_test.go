@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -110,5 +111,54 @@ func TestSubmitTokenCannotRetrieve(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/e/"+e.RetrieveID+"/retrieve", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("retrieve token rejected: status %d, want 200", rec.Code)
+	}
+}
+
+// The manage token reads back the other two links, but must not be able to
+// act with them. If it could submit or retrieve, the owner's bookmark would
+// become a way to consume the secret by accident.
+func TestManageTokenIsReadOnly(t *testing.T) {
+	s := testServer(t)
+	h := s.Handler()
+	e := &Entry{
+		Kind: KindRequest, Title: "t",
+		Secrets:    []Secret{{Name: "one", Type: TypeText}},
+		SubmitID:   NewID(),
+		RetrieveID: NewID(),
+		ManageID:   NewID(),
+		ExpiresAt:  timeNowPlusHour(),
+	}
+	s.store.Put(e)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/e/"+e.ManageID, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manage view: status %d, want 200", rec.Code)
+	}
+	var got EntryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Role != "manage" {
+		t.Errorf("role = %q, want manage", got.Role)
+	}
+	if got.SubmitURL == "" || got.RetrieveURL == "" {
+		t.Error("manage view withheld the links it exists to show")
+	}
+
+	for _, path := range []string{"/submit", "/retrieve"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/api/e/"+e.ManageID+path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("manage token POST%s = %d, want 404", path, rec.Code)
+		}
+	}
+	// It must not leak draft values either; that is the submitter's view.
+	s.store.SetText(e, 0, "drafted")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/e/"+e.ManageID, nil))
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.Secrets[0].Text != "" {
+		t.Errorf("manage view exposed the draft value %q", got.Secrets[0].Text)
 	}
 }

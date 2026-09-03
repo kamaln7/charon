@@ -49,7 +49,7 @@ func (s *server) viewEntry(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	writeJSON(w, http.StatusOK, entryResponse(e, rl))
+	writeJSON(w, http.StatusOK, s.cfg.entryResponse(e, rl))
 	return nil
 }
 
@@ -237,6 +237,7 @@ func (s *server) newEntry(kind Kind, req CreateRequest) (*Entry, error) {
 		Description: req.Description,
 		SubmitID:    NewID(),
 		RetrieveID:  NewID(),
+		ManageID:    NewID(),
 		ExpiresAt:   time.Now().Add(ttl),
 	}
 	for i, spec := range req.Secrets {

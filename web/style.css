@@ -277,7 +277,7 @@ button { font: inherit; cursor: pointer; }
   margin-bottom: .75rem;
 }
 
-.adders { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.adders { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
 .adders .lbl { font-size: .82rem; color: var(--ink-soft); }
 
 /* ---------- files ---------- */

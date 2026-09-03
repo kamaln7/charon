@@ -259,7 +259,7 @@ function builder(form, mode) {
         })),
       };
       const created = await api('POST', requesting ? '/api/requests' : '/api/secrets', spec);
-      if (requesting) return createdView(created, mode);
+      if (requesting) return location.assign(created.manage_url);
 
       // Send mode fills the draft it just created and submits it, so both
       // modes travel the same server-side path.
@@ -274,7 +274,7 @@ function builder(form, mode) {
         }
       }
       await api('POST', `/api/e/${id}/submit`);
-      createdView(created, mode);
+      location.assign(created.manage_url);
     } catch (e) {
       err.textContent = e.message;
       err.hidden = false;
@@ -310,8 +310,10 @@ function linkCard({ step, label, url, keep, note }) {
   return card;
 }
 
-function createdView(created, mode) {
-  const requesting = mode === 'request';
+// The manage page. Reached by redirect after creating, and bookmarkable: the
+// owner token is in the query string, so a refresh still shows the links.
+function manageView(created) {
+  const requesting = created.kind !== 'send';
   const view = el(`
     <div>
       <h1>${esc(created.title)}</h1>
@@ -551,16 +553,21 @@ async function boot() {
 
   // A Mini App opened via t.me/<bot>/<app>?startapp=<id> lands on "/" with the
   // id in start_param, so that is the only way we learn which entry to open.
-  const match = location.pathname.match(/^\/e\/([a-z2-7]+)$/);
-  const id = match?.[1] || tg?.initDataUnsafe?.start_param;
+  const path = location.pathname.match(/^\/e\/([a-z2-7]+)$/);
+  const token = new URLSearchParams(location.search).get('token');
+  const id = path?.[1] || token || tg?.initDataUnsafe?.start_param;
   if (!id) return home();
 
   try {
     const e = await api('GET', `/api/e/${id}`);
-    if (e.role === 'submit') {
-      return e.fulfilled ? fatal('This has already been submitted.') : submitForm(id, e);
+    switch (e.role) {
+      case 'manage':
+        return manageView(e);
+      case 'submit':
+        return e.fulfilled ? fatal('This has already been submitted.') : submitForm(id, e);
+      default:
+        return retrieveView(id, e);
     }
-    retrieveView(id, e);
   } catch (err) {
     fatal(err.status === 404 ? 'This link has expired or was already used.' : err.message);
   }
