@@ -104,11 +104,8 @@ func (c Callback) Send(store *Store, baseURL string, e *Entry) {
 	if err != nil {
 		return
 	}
-	body, err := json.Marshal(map[string]any{
-		"title":        e.Title,
-		"secrets":      payload(baseURL, secrets),
-		"destructs_at": e.ConsumedAt.Add(store.limits.Linger).UTC().Format(time.RFC3339),
-	})
+	body, err := json.Marshal(revealResponse(
+		baseURL, e.Title, e.ConsumedAt.Add(store.limits.Linger), secrets))
 	if err != nil {
 		return
 	}

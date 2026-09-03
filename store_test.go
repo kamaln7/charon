@@ -18,6 +18,8 @@ func testLimits() Limits {
 	}
 }
 
+func timeNowPlusHour() time.Time { return time.Now().Add(time.Hour) }
+
 func newTestEntry(s *Store, ttl time.Duration) *Entry {
 	e := &Entry{
 		Kind:       KindRequest,
@@ -35,7 +37,7 @@ func newTestEntry(s *Store, ttl time.Duration) *Entry {
 // entire security boundary, so a submit token that also retrieves would hand
 // the secret straight back to whoever was asked for it.
 func TestTokenRolesAreDistinct(t *testing.T) {
-	s := NewStore(t.TempDir(), testLimits())
+	s := NewStore(testLimits())
 	e := newTestEntry(s, time.Hour)
 
 	if _, role, err := s.Lookup(e.SubmitID); err != nil || role != roleSubmit {
@@ -50,7 +52,7 @@ func TestTokenRolesAreDistinct(t *testing.T) {
 }
 
 func TestRetrieveRequiresSubmission(t *testing.T) {
-	s := NewStore(t.TempDir(), testLimits())
+	s := NewStore(testLimits())
 	e := newTestEntry(s, time.Hour)
 
 	if _, err := s.Retrieve(e); err != ErrPending {
@@ -71,7 +73,7 @@ func TestRetrieveRequiresSubmission(t *testing.T) {
 // This is the behaviour that lets an agent retry without losing the payload,
 // and the reason the entry is not burned on the first byte.
 func TestLingerThenSelfDestruct(t *testing.T) {
-	s := NewStore(t.TempDir(), testLimits())
+	s := NewStore(testLimits())
 	e := newTestEntry(s, time.Hour)
 	s.SetText(e, 0, "hunter2")
 	s.Submit(e)
@@ -89,37 +91,37 @@ func TestLingerThenSelfDestruct(t *testing.T) {
 	}
 
 	// Still alive just before the window closes...
-	if n := s.Sweep(e.ConsumedAt.Add(29 * time.Second)); n != 0 {
-		t.Fatalf("swept %d entries while still lingering", n)
+	if paths := s.Sweep(e.ConsumedAt.Add(29 * time.Second)); paths != nil {
+		t.Fatalf("swept %v while still lingering", paths)
 	}
 	if _, _, err := s.Lookup(e.RetrieveID); err != nil {
 		t.Fatalf("entry gone during linger: %v", err)
 	}
 	// ...and gone after.
-	if n := s.Sweep(e.ConsumedAt.Add(31 * time.Second)); n != 1 {
-		t.Fatalf("want 1 entry swept after linger, got %d", n)
-	}
+	s.Sweep(e.ConsumedAt.Add(31 * time.Second))
 	if _, _, err := s.Lookup(e.RetrieveID); err != ErrNotFound {
 		t.Fatalf("want ErrNotFound after self-destruct, got %v", err)
 	}
 }
 
 func TestTTLExpiryWithoutRetrieval(t *testing.T) {
-	s := NewStore(t.TempDir(), testLimits())
+	s := NewStore(testLimits())
 	e := newTestEntry(s, time.Minute)
 
-	if n := s.Sweep(time.Now()); n != 0 {
-		t.Fatalf("swept %d live entries", n)
+	s.Sweep(time.Now())
+	if _, _, err := s.Lookup(e.RetrieveID); err != nil {
+		t.Fatalf("live entry was swept: %v", err)
 	}
-	if n := s.Sweep(e.ExpiresAt.Add(time.Second)); n != 1 {
-		t.Fatalf("want 1 expired entry swept, got %d", n)
+	s.Sweep(e.ExpiresAt.Add(time.Second))
+	if _, _, err := s.Lookup(e.RetrieveID); err != ErrNotFound {
+		t.Fatalf("expired entry survived the sweep: %v", err)
 	}
 }
 
 // Byte accounting has to survive the draft edit paths, or a long session of
 // typing and deleting would leak the global ceiling away.
 func TestTotalBytesAccounting(t *testing.T) {
-	s := NewStore(t.TempDir(), testLimits())
+	s := NewStore(testLimits())
 	e := newTestEntry(s, time.Hour)
 
 	s.SetText(e, 0, "12345")
@@ -145,7 +147,7 @@ func TestTotalBytesAccounting(t *testing.T) {
 func TestSetTextRespectsCeiling(t *testing.T) {
 	l := testLimits()
 	l.MaxTotalBytes = 4
-	s := NewStore(t.TempDir(), l)
+	s := NewStore(l)
 	e := newTestEntry(s, time.Hour)
 
 	if err := s.SetText(e, 0, "abcd"); err != nil {

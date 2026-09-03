@@ -104,27 +104,31 @@ func hmacSHA256(key, msg []byte) []byte {
 	return m.Sum(nil)
 }
 
-// authorized gates every API route. With no bot token configured the service is
-// wide open by design — it is meant to sit on a trusted network. Once a token
-// is set, a presented initData must be valid, and the allow-list is enforced.
-func (a *api) authorized(w http.ResponseWriter, r *http.Request) bool {
-	t := a.cfg.Telegram
-	raw := r.Header.Get("X-Telegram-Init-Data")
-	if raw == "" {
-		if t.Required {
-			fail(w, http.StatusUnauthorized, "Telegram authentication required")
-			return false
+// authenticate gates every API route in one place. With no bot token
+// configured the service is open by design — it is meant to sit on a trusted
+// network. Once a token is set, any presented initData must verify, and the
+// allow-list is enforced.
+func (s *server) authenticate(next http.Handler) http.Handler {
+	t := s.cfg.Telegram
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw := r.Header.Get("X-Telegram-Init-Data")
+		if raw == "" {
+			if t.Required {
+				writeError(w, errorf(http.StatusUnauthorized, "Telegram authentication required"))
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
 		}
-		return true
-	}
-	id, err := t.VerifyInitData(raw)
-	if err != nil {
-		fail(w, http.StatusUnauthorized, "invalid Telegram authentication")
-		return false
-	}
-	if len(t.Allowed) > 0 && !slices.Contains(t.Allowed, id) {
-		fail(w, http.StatusForbidden, "not authorised")
-		return false
-	}
-	return true
+		id, err := t.VerifyInitData(raw)
+		if err != nil {
+			writeError(w, errorf(http.StatusUnauthorized, "invalid Telegram authentication"))
+			return
+		}
+		if len(t.Allowed) > 0 && !slices.Contains(t.Allowed, id) {
+			writeError(w, errorf(http.StatusForbidden, "not authorised"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

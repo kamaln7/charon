@@ -38,20 +38,22 @@ var (
 // Secret is one named thing being asked for. Spec fields come from the creator;
 // Text and Files are filled in by the submitter.
 type Secret struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description,omitempty"`
-	Type        SecretType `json:"type"`
+	Name        string
+	Description string
+	Type        SecretType
 
-	Text  string `json:"text,omitempty"`
-	Files []File `json:"files,omitempty"`
+	Text  string
+	Files []File
 }
 
 type File struct {
-	Name  string `json:"name"`
-	Size  int64  `json:"size"`
+	Name  string
+	Size  int64
 	path  string
 	token string // minted at first retrieval; the one-shot download key
 }
+
+func (f File) Open() (*os.File, error) { return os.Open(f.path) }
 
 type Entry struct {
 	Kind        Kind
@@ -92,6 +94,13 @@ const (
 	roleRetrieve
 )
 
+func (r role) String() string {
+	if r == roleSubmit {
+		return "submit"
+	}
+	return "retrieve"
+}
+
 type ref struct {
 	entry *Entry
 	role  role
@@ -111,20 +120,18 @@ type Limits struct {
 }
 
 type Store struct {
-	mu      sync.Mutex
-	byID    map[string]ref
-	byFile  map[string]File
-	scratch string
-	limits  Limits
-	total   int64
+	mu     sync.Mutex
+	byID   map[string]ref
+	byFile map[string]File
+	limits Limits
+	total  int64
 }
 
-func NewStore(scratch string, limits Limits) *Store {
+func NewStore(limits Limits) *Store {
 	return &Store{
-		byID:    make(map[string]ref),
-		byFile:  make(map[string]File),
-		scratch: scratch,
-		limits:  limits,
+		byID:   make(map[string]ref),
+		byFile: make(map[string]File),
+		limits: limits,
 	}
 }
 
@@ -242,23 +249,30 @@ func (s *Store) AddFile(e *Entry, idx int, f File) {
 	e.bytes += f.Size
 }
 
-// DropFile removes a drafted file and reclaims its bytes.
-func (s *Store) DropFile(e *Entry, idx, n int) error {
+// DropFile removes a drafted file and reclaims its bytes. It returns the path
+// to delete rather than deleting it, so the store never touches the disk.
+func (s *Store) DropFile(e *Entry, idx, n int) (string, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if e.Fulfilled || idx < 0 || idx >= len(e.Secrets) || n < 0 || n >= len(e.Secrets[idx].Files) {
-		s.mu.Unlock()
-		return ErrNotFound
+		return "", ErrNotFound
 	}
 	f := e.Secrets[idx].Files[n]
 	e.Secrets[idx].Files = append(e.Secrets[idx].Files[:n], e.Secrets[idx].Files[n+1:]...)
 	e.bytes -= f.Size
 	s.total -= f.Size
-	s.mu.Unlock()
+	return f.path, nil
+}
 
-	if f.path != "" {
-		os.Remove(f.path)
+// CountFiles reports how many files an entry holds across all its secrets.
+func (s *Store) CountFiles(e *Entry) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, sec := range e.Secrets {
+		n += len(sec.Files)
 	}
-	return nil
+	return n
 }
 
 // SetText replaces one secret's text. This is the autosave path: the form PUTs
@@ -277,35 +291,33 @@ func (s *Store) SetText(e *Entry, idx int, text string) error {
 	return nil
 }
 
-// destroy removes an entry, its tokens and its files. Caller must not hold mu.
-func (s *Store) destroy(e *Entry) {
+// destroy removes an entry and its tokens, returning the file paths its caller
+// should delete. The store owns memory; the scratch directory owns disk.
+func (s *Store) destroy(e *Entry) []string {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.byID, e.SubmitID)
 	delete(s.byID, e.RetrieveID)
 	var paths []string
-	for _, it := range e.Secrets {
-		for _, f := range it.Files {
+	for _, sec := range e.Secrets {
+		for _, f := range sec.Files {
 			if f.path != "" {
 				paths = append(paths, f.path)
 			}
 		}
 	}
-	for _, it := range e.minted {
-		for _, f := range it.Files {
+	for _, sec := range e.minted {
+		for _, f := range sec.Files {
 			delete(s.byFile, f.token)
 		}
 	}
 	s.total -= e.bytes
-	s.mu.Unlock()
-
-	for _, p := range paths {
-		os.Remove(p)
-	}
+	return paths
 }
 
-// Sweep destroys everything past its deadline. Returns the count, which is what
-// the self-check asserts on.
-func (s *Store) Sweep(now time.Time) int {
+// Sweep destroys everything past its deadline, returning the file paths that
+// belonged to it. Returns nil when nothing expired.
+func (s *Store) Sweep(now time.Time) []string {
 	s.mu.Lock()
 	seen := make(map[*Entry]bool)
 	var dead []*Entry
@@ -317,25 +329,9 @@ func (s *Store) Sweep(now time.Time) int {
 	}
 	s.mu.Unlock()
 
+	var paths []string
 	for _, e := range dead {
-		s.destroy(e)
+		paths = append(paths, s.destroy(e)...)
 	}
-	return len(dead)
-}
-
-func (s *Store) Run(stop <-chan struct{}) {
-	t := time.NewTicker(time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-stop:
-			return
-		case now := <-t.C:
-			s.Sweep(now)
-		}
-	}
-}
-
-func (s *Store) scratchFile() (*os.File, error) {
-	return os.CreateTemp(s.scratch, "charon-")
+	return paths
 }

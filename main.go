@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"errors"
 	"io/fs"
@@ -16,99 +17,104 @@ import (
 var webFS embed.FS
 
 func main() {
-	cfg, err := LoadConfig()
-	if err != nil {
-		log.Fatalf("config: %v", err)
-	}
-
-	// The scratch directory holds file bytes only. It is created fresh and
-	// removed on exit: this service has no persistence, and a leftover
-	// directory of half-delivered secrets would be exactly that.
-	scratch := cfg.Scratch
-	if scratch == "" {
-		if scratch, err = os.MkdirTemp("", "charon-"); err != nil {
-			log.Fatalf("scratch: %v", err)
-		}
-		defer os.RemoveAll(scratch)
-	} else if err := os.MkdirAll(scratch, 0o700); err != nil {
-		log.Fatalf("scratch: %v", err)
-	}
-
-	// Fail here rather than on the first upload. A tmpfs mounted over the
-	// directory arrives owned by root, so an unprivileged container can end up
-	// with a scratch path it cannot write to — which otherwise shows up much
-	// later as one broken file part in an otherwise working submission.
-	probe, err := os.CreateTemp(scratch, "probe-")
-	if err != nil {
-		log.Fatalf("scratch %s is not writable: %v", scratch, err)
-	}
-	probe.Close()
-	os.Remove(probe.Name())
-
-	store := NewStore(scratch, cfg.Limits)
-	stop := make(chan struct{})
-	go store.Run(stop)
-
-	a := &api{store: store, cfg: cfg}
-	mux := http.NewServeMux()
-	a.routes(mux)
-
-	static, err := fs.Sub(webFS, "web")
-	if err != nil {
-		log.Fatalf("embed: %v", err)
-	}
-	index, err := fs.ReadFile(static, "index.html")
-	if err != nil {
-		log.Fatalf("embed: %v", err)
-	}
-	files := http.FileServer(http.FS(static))
-
-	// /e/<id> is a client-side route, so it has to return the app shell rather
-	// than a 404. Everything else falls through to the embedded files.
-	mux.HandleFunc("GET /e/{id}", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(index)
-	})
-	mux.Handle("GET /", files)
-
-	srv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           securityHeaders(mux),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-		<-sig
-		close(stop)
-		srv.Close()
-	}()
-
-	log.Printf("charon listening on %s (base %s, scratch %s)", cfg.Addr, cfg.BaseURL, scratch)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := run(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-// securityHeaders keeps secrets out of caches and referrers, and pins the CSP
-// tight enough that a stored-XSS in a description could not exfiltrate a
-// revealed secret. telegram.org is allowed because the Mini App bridge script
-// has to come from there.
-func securityHeaders(next http.Handler) http.Handler {
-	const csp = "default-src 'self'; " +
-		"script-src 'self' https://telegram.org; " +
-		"style-src 'self' 'unsafe-inline'; " +
-		"img-src 'self' data:; " +
-		"connect-src 'self'; " +
-		"frame-ancestors https://web.telegram.org; " +
-		"base-uri 'none'; form-action 'none'"
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		h.Set("Content-Security-Policy", csp)
-		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
-	})
+func run() error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	scratch, cleanup, err := openScratch(cfg.Scratch)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	// Sweep before serving. With a persistent scratch mount, a crash or a
+	// SIGKILL leaves files behind that no in-memory entry refers to any more;
+	// their encoded expiry is the only thing that can still identify them.
+	if n := scratch.Sweep(time.Now()); n > 0 {
+		log.Printf("startup: removed %d expired scratch file(s)", n)
+	}
+
+	store := NewStore(cfg.Limits)
+
+	web, err := fs.Sub(webFS, "web")
+	if err != nil {
+		return err
+	}
+	srv, err := newServer(cfg, store, scratch, web)
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go reap(ctx, store, scratch)
+
+	httpSrv := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		<-ctx.Done()
+		httpSrv.Close()
+	}()
+
+	log.Printf("charon listening on %s (base %s, scratch %s)", cfg.Addr, cfg.BaseURL, scratch.Dir())
+	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// openScratch prepares the directory holding file bytes. An unconfigured path
+// gets a private temp directory removed on exit: this service has no
+// persistence, and a leftover directory of half-delivered secrets would be
+// exactly that.
+func openScratch(dir string) (*Scratch, func(), error) {
+	cleanup := func() {}
+	if dir == "" {
+		tmp, err := os.MkdirTemp("", "charon-")
+		if err != nil {
+			return nil, cleanup, err
+		}
+		dir, cleanup = tmp, func() { os.RemoveAll(tmp) }
+	} else if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, cleanup, err
+	}
+	s := NewScratch(dir)
+	if err := s.Writable(); err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	return s, cleanup, nil
+}
+
+// reap expires entries and collects orphaned files on the same tick.
+func reap(ctx context.Context, store *Store, scratch *Scratch) {
+	entries := time.NewTicker(time.Second)
+	defer entries.Stop()
+	// Files are deleted as their entries die, so this pass only catches
+	// orphans. Once a minute is plenty.
+	files := time.NewTicker(time.Minute)
+	defer files.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-entries.C:
+			for _, path := range store.Sweep(now) {
+				scratch.Remove(path)
+			}
+		case now := <-files.C:
+			scratch.Sweep(now)
+		}
+	}
 }

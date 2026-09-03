@@ -244,6 +244,23 @@ go run .
 The frontend is three static files under `web/`, embedded with `//go:embed`.
 No build step, no bundler, no dependencies.
 
+| File | Holds |
+|---|---|
+| `main.go` | wiring, scratch setup, the reaper |
+| `server.go` | routes, middleware, handler plumbing |
+| `handlers.go` | one function per endpoint |
+| `model.go` | every request and response type, and the conversions |
+| `store.go` | entries, tokens, byte accounting — memory only |
+| `scratch.go` | the disk side: expiry-encoded filenames and sweeps |
+| `callback.go`, `telegram.go`, `ttl.go`, `config.go`, `names.go` | as named |
+
+Scratch filenames are `<unix expiry>-<random>`. The store deletes files as
+their entries die, but it only knows about entries this process created — a
+crash or a SIGKILL with a persistent scratch mount leaves orphans nothing would
+collect. Encoding the deadline in the name means a sweep needs no state: read
+the directory, parse the prefix, delete what is past due. That runs on a timer
+and again at startup.
+
 ## License
 
 MIT
