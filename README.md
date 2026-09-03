@@ -150,7 +150,7 @@ network, or in front of a reverse proxy that authenticates.
 ## Running
 
 ```console
-docker run -p 1337:1337 --tmpfs /scratch:size=512m ghcr.io/kamaln7/charon
+docker run -p 1337:1337 --tmpfs /scratch:size=512m,uid=65532,gid=65532 ghcr.io/kamaln7/charon
 ```
 
 Behind a reverse proxy, set `CHARON_BASE_URL` to the public origin. Compose:
@@ -163,7 +163,7 @@ services:
     environment:
       CHARON_BASE_URL: https://secrets.example
     tmpfs:
-      - /scratch:size=512m
+      - /scratch:size=512m,uid=65532,gid=65532
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

@@ -34,6 +34,17 @@ func main() {
 		log.Fatalf("scratch: %v", err)
 	}
 
+	// Fail here rather than on the first upload. A tmpfs mounted over the
+	// directory arrives owned by root, so an unprivileged container can end up
+	// with a scratch path it cannot write to — which otherwise shows up much
+	// later as one broken file part in an otherwise working submission.
+	probe, err := os.CreateTemp(scratch, "probe-")
+	if err != nil {
+		log.Fatalf("scratch %s is not writable: %v", scratch, err)
+	}
+	probe.Close()
+	os.Remove(probe.Name())
+
 	store := NewStore(scratch, cfg.Limits)
 	stop := make(chan struct{})
 	go store.Run(stop)
