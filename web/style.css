@@ -1,0 +1,174 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;
+  --panel: #ffffff;
+  --ink: #16171a;
+  --muted: #6b7280;
+  --line: #e4e4e7;
+  --accent: #3d5afe;
+  --accent-ink: #ffffff;
+  --danger: #b42318;
+  --ok: #067647;
+  --radius: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101114;
+    --panel: #181a1f;
+    --ink: #e8e9ec;
+    --muted: #9096a1;
+    --line: #2a2d34;
+    --accent: #7c8cff;
+    --accent-ink: #101114;
+    --danger: #ff8a80;
+    --ok: #6ee7a8;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.1rem calc(3rem + env(safe-area-inset-bottom));
+}
+
+h1 {
+  font-size: 1.3rem;
+  font-weight: 620;
+  letter-spacing: -0.015em;
+  margin: 0 0 .2rem;
+}
+
+.sub { color: var(--muted); font-size: .875rem; margin: 0 0 1.4rem; }
+
+/* Markdown-rendered blocks: keep them from throwing off the rhythm. */
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md { font-size: .9rem; color: var(--muted); }
+.md code {
+  font: .85em ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  padding: .1em .35em;
+  border-radius: 4px;
+}
+.md pre { overflow-x: auto; padding: .7rem; background: color-mix(in srgb, var(--ink) 6%, transparent); border-radius: 8px; }
+.md pre code { background: none; padding: 0; }
+.md a { color: var(--accent); }
+
+.tabs { display: flex; gap: .3rem; margin-bottom: 1.3rem; }
+.tabs button {
+  flex: 1;
+  padding: .5rem;
+  font: inherit;
+  font-weight: 520;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.tabs button[aria-selected="true"] {
+  color: var(--ink);
+  background: var(--panel);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.field { margin-bottom: 1.1rem; }
+.field > label {
+  display: block;
+  font-size: .8rem;
+  font-weight: 560;
+  letter-spacing: .01em;
+  margin-bottom: .35rem;
+}
+.field .md { margin: -.15rem 0 .4rem; }
+
+input[type="text"], textarea, select {
+  width: 100%;
+  padding: .6rem .7rem;
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  transition: border-color .12s ease;
+}
+input[type="text"]:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+textarea { min-height: 4.5rem; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .875rem; }
+
+button.primary {
+  width: 100%;
+  padding: .7rem;
+  font: inherit;
+  font-weight: 580;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+button.primary:disabled { opacity: .5; cursor: default; }
+
+button.ghost {
+  font: inherit;
+  font-size: .8rem;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: .3rem .6rem;
+  cursor: pointer;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: .9rem;
+  margin-bottom: 1rem;
+}
+
+.item { border-top: 1px solid var(--line); padding-top: 1rem; margin-top: 1rem; }
+.item:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+
+.files { list-style: none; margin: .5rem 0 0; padding: 0; }
+.files li {
+  display: flex; align-items: center; gap: .5rem;
+  font-size: .85rem;
+  padding: .35rem .5rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  margin-bottom: .35rem;
+}
+.files .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files .size { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.value {
+  font: .875rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.linkbox { display: flex; gap: .4rem; margin-top: .4rem; }
+.linkbox input { font-size: .8rem; font-family: ui-monospace, monospace; }
+
+.note { font-size: .8rem; color: var(--muted); margin: .5rem 0 0; }
+.error { color: var(--danger); font-size: .875rem; }
+.ok { color: var(--ok); }
+.saving { font-size: .72rem; color: var(--muted); float: right; font-weight: 400; }
+
+.center { text-align: center; padding: 3rem 0; color: var(--muted); }

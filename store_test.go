@@ -1,0 +1,204 @@
+package main
+
+import (
+	"testing"
+	"time"
+)
+
+func testLimits() Limits {
+	return Limits{
+		MaxTextBytes:  1 << 10,
+		MaxFileBytes:  1 << 10,
+		MaxFiles:      4,
+		MaxTotalBytes: 1 << 20,
+		MaxTTL:        time.Hour,
+		Linger:        30 * time.Second,
+	}
+}
+
+func newTestEntry(s *Store, ttl time.Duration) *Entry {
+	e := &Entry{
+		Kind:       KindRequest,
+		Title:      "t",
+		Items:      []Item{{Name: "one", Type: TypeText}},
+		SubmitID:   NewID(),
+		RetrieveID: NewID(),
+		ExpiresAt:  time.Now().Add(ttl),
+	}
+	s.Put(e)
+	return e
+}
+
+// The two tokens must not be interchangeable: holding the public link is the
+// entire security boundary, so a submit token that also retrieves would hand
+// the secret straight back to whoever was asked for it.
+func TestTokenRolesAreDistinct(t *testing.T) {
+	s := NewStore(t.TempDir(), testLimits())
+	e := newTestEntry(s, time.Hour)
+
+	if _, role, err := s.Lookup(e.SubmitID); err != nil || role != roleSubmit {
+		t.Fatalf("submit token: role=%v err=%v", role, err)
+	}
+	if _, role, err := s.Lookup(e.RetrieveID); err != nil || role != roleRetrieve {
+		t.Fatalf("retrieve token: role=%v err=%v", role, err)
+	}
+	if e.SubmitID == e.RetrieveID {
+		t.Fatal("tokens are identical")
+	}
+}
+
+func TestRetrieveRequiresSubmission(t *testing.T) {
+	s := NewStore(t.TempDir(), testLimits())
+	e := newTestEntry(s, time.Hour)
+
+	if _, err := s.Retrieve(e); err != ErrPending {
+		t.Fatalf("want ErrPending before submit, got %v", err)
+	}
+	if err := s.Submit(e); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Submit(e); err != ErrFulfilled {
+		t.Fatalf("want ErrFulfilled on double submit, got %v", err)
+	}
+	if _, err := s.Retrieve(e); err != nil {
+		t.Fatalf("retrieve after submit: %v", err)
+	}
+}
+
+// Retrieval must be idempotent inside the linger window and dead after it.
+// This is the behaviour that lets an agent retry without losing the payload,
+// and the reason the entry is not burned on the first byte.
+func TestLingerThenSelfDestruct(t *testing.T) {
+	s := NewStore(t.TempDir(), testLimits())
+	e := newTestEntry(s, time.Hour)
+	s.SetText(e, 0, "hunter2")
+	s.Submit(e)
+
+	first, err := s.Retrieve(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Retrieve(e)
+	if err != nil {
+		t.Fatalf("second retrieve inside linger window: %v", err)
+	}
+	if first[0].Text != "hunter2" || second[0].Text != "hunter2" {
+		t.Fatalf("payload changed between reads: %q then %q", first[0].Text, second[0].Text)
+	}
+
+	// Still alive just before the window closes...
+	if n := s.Sweep(e.ConsumedAt.Add(29 * time.Second)); n != 0 {
+		t.Fatalf("swept %d entries while still lingering", n)
+	}
+	if _, _, err := s.Lookup(e.RetrieveID); err != nil {
+		t.Fatalf("entry gone during linger: %v", err)
+	}
+	// ...and gone after.
+	if n := s.Sweep(e.ConsumedAt.Add(31 * time.Second)); n != 1 {
+		t.Fatalf("want 1 entry swept after linger, got %d", n)
+	}
+	if _, _, err := s.Lookup(e.RetrieveID); err != ErrNotFound {
+		t.Fatalf("want ErrNotFound after self-destruct, got %v", err)
+	}
+}
+
+func TestTTLExpiryWithoutRetrieval(t *testing.T) {
+	s := NewStore(t.TempDir(), testLimits())
+	e := newTestEntry(s, time.Minute)
+
+	if n := s.Sweep(time.Now()); n != 0 {
+		t.Fatalf("swept %d live entries", n)
+	}
+	if n := s.Sweep(e.ExpiresAt.Add(time.Second)); n != 1 {
+		t.Fatalf("want 1 expired entry swept, got %d", n)
+	}
+}
+
+// Byte accounting has to survive the draft edit paths, or a long session of
+// typing and deleting would leak the global ceiling away.
+func TestTotalBytesAccounting(t *testing.T) {
+	s := NewStore(t.TempDir(), testLimits())
+	e := newTestEntry(s, time.Hour)
+
+	s.SetText(e, 0, "12345")
+	if s.total != 5 {
+		t.Fatalf("after write: total=%d want 5", s.total)
+	}
+	s.SetText(e, 0, "1")
+	if s.total != 1 {
+		t.Fatalf("after shrink: total=%d want 1", s.total)
+	}
+	s.SetText(e, 0, "")
+	if s.total != 0 {
+		t.Fatalf("after clear: total=%d want 0", s.total)
+	}
+
+	s.SetText(e, 0, "abc")
+	s.destroy(e)
+	if s.total != 0 {
+		t.Fatalf("after destroy: total=%d want 0", s.total)
+	}
+}
+
+func TestSetTextRespectsCeiling(t *testing.T) {
+	l := testLimits()
+	l.MaxTotalBytes = 4
+	s := NewStore(t.TempDir(), l)
+	e := newTestEntry(s, time.Hour)
+
+	if err := s.SetText(e, 0, "abcd"); err != nil {
+		t.Fatalf("write at the limit: %v", err)
+	}
+	if err := s.SetText(e, 0, "abcde"); err != ErrFull {
+		t.Fatalf("want ErrFull past the limit, got %v", err)
+	}
+	if e.Items[0].Text != "abcd" {
+		t.Fatalf("rejected write mutated the item: %q", e.Items[0].Text)
+	}
+}
+
+func TestParseTTL(t *testing.T) {
+	max := 7 * 24 * time.Hour
+	for in, want := range map[string]time.Duration{
+		"":    time.Hour,
+		"15m": 15 * time.Minute,
+		"6h":  6 * time.Hour,
+		"3d":  72 * time.Hour,
+		"1w":  max,
+	} {
+		got, err := parseTTL(in, max)
+		if err != nil || got != want {
+			t.Errorf("parseTTL(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"2w", "0d", "-1h", "banana", "1y"} {
+		if _, err := parseTTL(in, max); err == nil {
+			t.Errorf("parseTTL(%q) accepted an invalid or over-cap value", in)
+		}
+	}
+}
+
+// IDs are the only thing protecting an entry, so they must not be sequential.
+func TestIDsAreUnguessable(t *testing.T) {
+	seen := make(map[string]bool)
+	for i := 0; i < 1000; i++ {
+		id := NewID()
+		if len(id) != 24 {
+			t.Fatalf("id %q has length %d, want 24", id, len(id))
+		}
+		if seen[id] {
+			t.Fatalf("duplicate id %q after %d draws", id, i)
+		}
+		seen[id] = true
+	}
+	// Two consecutive IDs from a counter-based scheme would share a long
+	// prefix; random ones essentially never do.
+	a, b := NewID(), NewID()
+	common := 0
+	for common < len(a) && a[common] == b[common] {
+		common++
+	}
+	if common > 6 {
+		t.Fatalf("ids %q and %q share a %d-character prefix; are they sequential?", a, b, common)
+	}
+}
