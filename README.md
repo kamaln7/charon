@@ -168,20 +168,19 @@ bot can send you a link that opens the form inline in the chat.
 
 1. In BotFather: `/newapp`, pick your bot, give it a short name (e.g. `secrets`)
    and point it at your charon URL.
-2. Set `CHARON_TELEGRAM_BOT_TOKEN`, `CHARON_TELEGRAM_BOT_NAME` and
-   `CHARON_TELEGRAM_APP_NAME`.
+2. Set `CHARON_TELEGRAM_BOT_NAME` and `CHARON_TELEGRAM_APP_NAME`.
 3. `telegram_url` now comes back on every create. A bot only needs to send it as
    **plain text** — no inline-keyboard payload — and Telegram renders an Open
    button. The ID travels in `?startapp=`, which the page reads back as
    `initDataUnsafe.start_param`.
 
-The page sends `initData` in an `X-Telegram-Init-Data` header on every call.
-The server verifies it (HMAC-SHA256 under a `WebAppData`-derived key, plus an
-`auth_date` freshness check) and can restrict access to specific user IDs.
-
 > The page is loaded by **your device**, not by Telegram's servers. If charon is
 > only reachable on a LAN or a VPN, the Mini App works only when your phone is on
 > that network. The TLS certificate must be publicly trusted either way.
+
+The Mini App is a convenience, not an authentication scheme: the page is an
+ordinary web page and charon does not verify Telegram identities. Possession of
+a link is the only credential.
 
 ## Configuration
 
@@ -200,17 +199,15 @@ The server verifies it (HMAC-SHA256 under a `WebAppData`-derived key, plus an
 | `CHARON_LINGER` | `60s` | Grace period after the first read |
 | `CHARON_CALLBACK_RULE` | — | rulekit expression; unset disables callbacks |
 | `CHARON_CALLBACK_SECRET` | — | HMAC key for signing callback deliveries |
-| `CHARON_TELEGRAM_BOT_TOKEN` | — | Enables initData verification |
 | `CHARON_TELEGRAM_BOT_NAME` | — | Bot username, for `telegram_url` |
 | `CHARON_TELEGRAM_APP_NAME` | — | Mini App short name |
-| `CHARON_TELEGRAM_ALLOWED_USERS` | — | Comma-separated Telegram user IDs |
-| `CHARON_TELEGRAM_REQUIRED` | `false` | Reject calls with no valid initData |
 
 Durations (`CHARON_DEFAULT_TTL`, `CHARON_MAX_TTL`, `CHARON_LINGER`) accept `d`
 and `w` in addition to Go's own units, so `7d` and `1w` both work.
 
-With no bot token set the API is unauthenticated by design — put it on a trusted
-network, or in front of a reverse proxy that authenticates.
+**The API is unauthenticated by design.** Possession of a link is the whole
+security model. Run charon on a trusted network, or behind a reverse proxy that
+authenticates.
 
 ## Running
 

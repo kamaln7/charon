@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -151,4 +153,10 @@ func (c Callback) post(target string, body []byte) error {
 		return fmt.Errorf("status %d", res.StatusCode)
 	}
 	return nil
+}
+
+func hmacSHA256(key, msg []byte) []byte {
+	m := hmac.New(sha256.New, key)
+	m.Write(msg)
+	return m.Sum(nil)
 }

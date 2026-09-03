@@ -33,9 +33,9 @@ func newServer(cfg Config, store *Store, scratch *Scratch, web fs.FS) (*server, 
 
 // Handler wires the routes and the middleware chain.
 //
-// Everything under /api is authenticated in one place rather than by each
-// handler remembering to ask, which is how an unauthenticated route gets
-// added by accident.
+// The API is unauthenticated by design: possession of a link is the only
+// credential, and charon is meant to sit on a trusted network or behind a
+// proxy that authenticates.
 func (s *server) Handler() http.Handler {
 	api := http.NewServeMux()
 	api.Handle("GET /api/config", s.handle(s.getConfig))
@@ -50,7 +50,7 @@ func (s *server) Handler() http.Handler {
 	api.Handle("GET /api/f/{token}", s.handle(s.downloadFile))
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/", s.authenticate(api))
+	mux.Handle("/api/", api)
 	// /e/<id> is a client-side route, so it serves the app shell rather than a
 	// 404. Everything else falls through to the embedded assets.
 	mux.HandleFunc("GET /e/{id}", s.serveIndex)

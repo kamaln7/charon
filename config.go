@@ -33,10 +33,8 @@ func LoadConfig() (Config, error) {
 			MaxTotalBytes: envInt("CHARON_MAX_TOTAL_BYTES", 256<<20),
 		},
 		Telegram: Telegram{
-			BotToken: env("CHARON_TELEGRAM_BOT_TOKEN", ""),
-			BotName:  env("CHARON_TELEGRAM_BOT_NAME", ""),
-			AppName:  env("CHARON_TELEGRAM_APP_NAME", ""),
-			Required: env("CHARON_TELEGRAM_REQUIRED", "") == "true",
+			BotName: env("CHARON_TELEGRAM_BOT_NAME", ""),
+			AppName: env("CHARON_TELEGRAM_APP_NAME", ""),
 		},
 		Callback: Callback{
 			Secret: env("CHARON_CALLBACK_SECRET", ""),
@@ -64,18 +62,6 @@ func LoadConfig() (Config, error) {
 		}
 	}
 
-	for _, id := range strings.Split(env("CHARON_TELEGRAM_ALLOWED_USERS", ""), ",") {
-		if id = strings.TrimSpace(id); id != "" {
-			n, err := strconv.ParseInt(id, 10, 64)
-			if err != nil {
-				return c, fmt.Errorf("CHARON_TELEGRAM_ALLOWED_USERS: %q is not a user ID", id)
-			}
-			c.Telegram.Allowed = append(c.Telegram.Allowed, n)
-		}
-	}
-	if c.Telegram.Required && c.Telegram.BotToken == "" {
-		return c, fmt.Errorf("CHARON_TELEGRAM_REQUIRED needs CHARON_TELEGRAM_BOT_TOKEN")
-	}
 	return c, nil
 }
 

@@ -7,10 +7,13 @@ let cfg = {};
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Returns the single root element, or a fragment when the template has
+// several. Returning only firstElementChild silently dropped the rest, which
+// is how a <ul> disappeared and left a null querySelector behind.
 const el = (html) => {
   const t = document.createElement('template');
   t.innerHTML = html.trim();
-  return t.content.firstElementChild;
+  return t.content.childElementCount === 1 ? t.content.firstElementChild : t.content;
 };
 
 const bytes = (n) => {
@@ -34,9 +37,6 @@ const ttlLabel = (o) =>
 
 async function api(method, path, body) {
   const headers = {};
-  // initData is the whole auth story: sent on every call so the server checks
-  // it per-request rather than minting a session of its own.
-  if (tg?.initData) headers['X-Telegram-Init-Data'] = tg.initData;
   if (body && !(body instanceof FormData)) headers['Content-Type'] = 'application/json';
 
   const res = await fetch(path, {
@@ -117,7 +117,7 @@ function builder(form, mode) {
       <section>
         <div class="stack">
           <div>
-            <label for="title">Title <span class="hint">optional</span></label>
+            <label for="title">${requesting ? 'Request name' : 'Secret name'} <span class="hint">optional</span></label>
             <input type="text" id="title" placeholder="a name is generated if you skip this"
                    autocomplete="off" autocapitalize="sentences">
           </div>
@@ -127,12 +127,12 @@ function builder(form, mode) {
 
       <section>
         <p class="rubric">Secrets</p>
-        <div id="rows"></div>
         <div class="adders">
-          <span class="lbl">Add secret:</span>
+          <span class="lbl">Add:</span>
           <button type="button" class="chip" data-add="text">Text</button>
           <button type="button" class="chip" data-add="file">File</button>
         </div>
+        <div id="rows"></div>
       </section>
 
       <section>
@@ -297,10 +297,13 @@ function copyButton(text) {
   return b;
 }
 
-function linkCard(labelText, url, keep) {
+// step numbers the two links a request produces, so it is obvious which one
+// goes out and which one you keep.
+function linkCard({ step, label, url, keep, note }) {
   const card = el(`<div class="card${keep ? ' keep' : ''}">
-      <label>${esc(labelText)}</label>
+      <label class="card-head">${step ? `<span class="step">${step}</span>` : ''}${esc(label)}</label>
       <div class="linkbox"><input type="text" readonly value="${esc(url)}"></div>
+      ${note ? `<p class="note">${note}</p>` : ''}
     </div>`);
   card.querySelector('.linkbox').append(copyButton(url));
   card.querySelector('input').addEventListener('focus', (e) => e.target.select());
@@ -322,11 +325,24 @@ function createdView(created, mode) {
   const links = view.querySelector('#links');
 
   if (requesting) {
-    links.append(linkCard('Send this to whoever has the secrets', created.submit_url));
-    if (created.telegram_url) links.append(linkCard('…or the Telegram version', created.telegram_url));
-    links.append(linkCard('Keep this — it is how you read the answer', created.retrieve_url, true));
+    links.append(
+      linkCard({
+        step: 1,
+        label: 'Send this to whoever has the secrets',
+        url: created.submit_url,
+        note: created.telegram_url
+          ? `Telegram: <a href="${esc(created.telegram_url)}">open in the chat</a>`
+          : '',
+      }),
+      linkCard({
+        step: 2,
+        label: 'Keep this — it is how you read the answer',
+        url: created.retrieve_url,
+        keep: true,
+      })
+    );
   } else {
-    links.append(linkCard('Send this to the recipient', created.retrieve_url));
+    links.append(linkCard({ label: 'Send this to the recipient', url: created.retrieve_url }));
   }
   show(view);
 }
@@ -424,7 +440,9 @@ function submitForm(id, e) {
 
   const send = el('<button type="submit" class="primary">Submit</button>');
   const err = el('<p class="error" hidden></p>');
-  form.append(el('<section></section>')).lastElementChild.append(send, err);
+  const footer = el('<section></section>');
+  footer.append(send, err);
+  form.append(footer);
 
   form.onsubmit = async (ev) => {
     ev.preventDefault();
