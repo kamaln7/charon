@@ -51,6 +51,29 @@ async function api(method, path, body) {
 }
 
 const show = (node) => app.replaceChildren(node);
+
+// telegram-web-app.js defines its methods even in an ordinary browser and
+// throws WebAppMethodUnsupported when there is no Telegram host behind them.
+// So every call has to be attempted, not feature-detected.
+const tgTry = (fn) => {
+  try {
+    return fn();
+  } catch {
+    return undefined;
+  }
+};
+
+// Telegram's webview blocks window.confirm; a browser has no Telegram dialog.
+// Try theirs, fall back to the native one.
+const confirmed = (message) =>
+  new Promise((resolve) => {
+    let asked = false;
+    tgTry(() => {
+      tg.showConfirm(message, resolve);
+      asked = true;
+    });
+    if (!asked) resolve(window.confirm(message));
+  });
 const fatal = (msg) => show(el(`<div class="center"><h1>Nothing here</h1><p class="lede">${esc(msg)}</p></div>`));
 
 // A field that starts hidden behind a text button. Descriptions are optional
@@ -467,9 +490,23 @@ function submitForm(id, e) {
     send.disabled = true;
     err.hidden = true;
     try {
+      // Ask the server what actually landed rather than trusting the form:
+      // autosave is debounced, so a field typed a moment ago may not be in yet.
+      const fresh = await api('GET', `/api/e/${id}`);
+      const blank = fresh.secrets.filter((s) => !s.text && !(s.files || []).length);
+      if (blank.length) {
+        const names = blank.map((s) => s.name).join(', ');
+        const ok = await confirmed(
+          `${blank.length === 1 ? 'This is' : 'These are'} still empty: ${names}.\n\nSubmit anyway?`
+        );
+        if (!ok) {
+          send.disabled = false;
+          return;
+        }
+      }
       await api('POST', `/api/e/${id}/submit`);
       show(el(`<div class="center"><h1>Sent</h1><p class="lede">They can read it once. You can close this.</p></div>`));
-      setTimeout(() => tg?.close?.(), 1200);
+      setTimeout(() => tgTry(() => tg.close()), 1200);
     } catch (e2) {
       err.querySelector('p').textContent = e2.message;
       err.hidden = false;
@@ -561,8 +598,8 @@ function revealed(got) {
 // ---------- boot ----------
 
 async function boot() {
-  tg?.ready?.();
-  tg?.expand?.();
+  tgTry(() => tg.ready());
+  tgTry(() => tg.expand());
 
   try {
     cfg = await api('GET', '/api/config');

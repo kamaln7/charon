@@ -83,11 +83,14 @@ type RevealResponse struct {
 	DestructsAt string           `json:"destructs_at"`
 }
 
+// RevealedSecret always carries both value fields, null when the submitter
+// skipped that one. A missing key and a skipped secret would otherwise look
+// identical to a caller, so "did they answer?" stays answerable.
 type RevealedSecret struct {
 	Name  string         `json:"name"`
 	Type  SecretType     `json:"type"`
-	Text  string         `json:"text,omitempty"`
-	Files []FileResponse `json:"files,omitempty"`
+	Text  *string        `json:"text"`
+	Files []FileResponse `json:"files"`
 }
 
 type FileResponse struct {
@@ -168,7 +171,11 @@ func revealResponse(baseURL, title string, destructsAt time.Time, secrets []Secr
 		DestructsAt: rfc3339(destructsAt),
 	}
 	for _, sec := range secrets {
-		r := RevealedSecret{Name: sec.Name, Type: sec.Type, Text: sec.Text}
+		r := RevealedSecret{Name: sec.Name, Type: sec.Type}
+		if sec.Text != "" {
+			text := sec.Text
+			r.Text = &text
+		}
 		for _, f := range sec.Files {
 			r.Files = append(r.Files, FileResponse{
 				Filename: f.Name,

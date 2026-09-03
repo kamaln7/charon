@@ -97,6 +97,10 @@ curl https://secrets.example/api/e/<retrieve_id>            # {"fulfilled": fals
 curl -X POST https://secrets.example/api/e/<retrieve_id>/retrieve
 ```
 
+A submitter may skip a field: the form asks them to confirm, then submits. Both
+value keys are always present and `null` when skipped, so "they left it blank"
+is distinguishable from "this version does not send that key".
+
 `POST .../retrieve` answers `409` until the other side submits, so polling it
 directly works too. Text values come inline; files come as one-shot URLs, valid
 until the entry self-destructs — an agent should not be handed a base64 blob.
@@ -106,9 +110,10 @@ until the entry self-destructs — an agent should not be handed a base64 blob.
   "title": "DigitalOcean deploy credentials",
   "destructs_at": "2026-09-03T13:59:56Z",
   "secrets": [
-    {"name": "DO_API_TOKEN", "type": "text", "text": "dop_v1_..."},
-    {"name": "deploy key", "type": "file",
-     "files": [{"filename": "id_ed25519", "size": 411, "url": ".../api/f/lzzulu..."}]}
+    {"name": "DO_API_TOKEN", "type": "text", "text": "dop_v1_...", "files": null},
+    {"name": "deploy key", "type": "file", "text": null,
+     "files": [{"filename": "id_ed25519", "size": 411, "url": ".../api/f/lzzulu..."}]},
+    {"name": "optional note", "type": "text", "text": null, "files": null}
   ]
 }
 ```
