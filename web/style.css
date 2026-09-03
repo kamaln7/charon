@@ -43,8 +43,8 @@ h1 {
 /* ---------- mode picker ---------- */
 
 .nav { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: 1.75rem; }
+.back { padding-left: 0; margin-bottom: .75rem; }
 .nav .card { padding: .95rem .8rem; text-align: left; cursor: pointer; gap: 0; }
-.nav .card[aria-selected="true"] { border-color: var(--primary); background: var(--accent); }
 .nav .t { display: block; font-weight: 600; font-size: .95rem; }
 .nav .d { display: block; font-size: .78rem; color: var(--muted-foreground); margin-top: .12rem; }
 
@@ -82,7 +82,11 @@ h1 {
 }
 .row-head .input:hover { border-color: var(--border); }
 
-.empty { margin-bottom: .75rem; }
+/* Basecoat's .empty is sized for a full-page state; here it is one small
+   placeholder inside a form. */
+.empty { margin-bottom: .75rem; padding: 1.75rem 1rem; }
+.empty h3 { font-size: .95rem; }
+.empty p { font-size: .85rem; }
 
 /* ---------- files ---------- */
 

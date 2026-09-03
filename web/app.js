@@ -75,37 +75,40 @@ function collapsible(buttonText, labelText, placeholder) {
 
 // ---------- home ----------
 
+// The landing page is only the choice. Nothing else is on screen until you
+// have made it, so the first thing you see is one decision rather than a form.
 function home() {
-  let mode = 'request';
-
   const view = el(`
     <div>
       <h1>charon</h1>
-      <p class="lede">One-way delivery. Nothing is written to disk, nothing survives a restart.</p>
-      <div class="nav" role="tablist">
-        <button type="button" class="card" role="tab" data-mode="request" aria-selected="true">
+      <p class="lede">Ephemeral secret sharing.</p>
+      <div class="nav">
+        <button type="button" class="card" data-mode="request">
           <span class="t">Request</span><span class="d">Ask someone for secrets</span>
         </button>
-        <button type="button" class="card" role="tab" data-mode="send" aria-selected="false">
+        <button type="button" class="card" data-mode="send">
           <span class="t">Send</span><span class="d">Hand over your own</span>
         </button>
       </div>
+    </div>`);
+  view.querySelectorAll('[data-mode]').forEach((b) =>
+    b.addEventListener('click', () => compose(b.dataset.mode))
+  );
+  show(view);
+}
+
+// The chooser is replaced by the form for the mode you picked.
+function compose(mode) {
+  const requesting = mode === 'request';
+  const view = el(`
+    <div>
+      <button type="button" class="btn back" data-variant="link" data-size="sm">&larr; Back</button>
+      <h1>${requesting ? 'Request secrets' : 'Send a secret'}</h1>
+      <p class="lede">${requesting ? 'Ask someone to fill these in.' : 'Hand these over on a one-time link.'}</p>
       <form id="builder"></form>
     </div>`);
-
-  const tabs = [...view.querySelectorAll('[role=tab]')];
-  const draw = () => {
-    tabs.forEach((t) => t.setAttribute('aria-selected', String(t.dataset.mode === mode)));
-    builder(view.querySelector('#builder'), mode);
-  };
-  tabs.forEach((t) =>
-    t.addEventListener('click', () => {
-      if (mode === t.dataset.mode) return;
-      mode = t.dataset.mode;
-      draw();
-    })
-  );
-  draw();
+  view.querySelector('.back').addEventListener('click', home);
+  builder(view.querySelector('#builder'), mode);
   show(view);
 }
 
