@@ -31,20 +31,25 @@ func (a *api) routes(mux *http.ServeMux) {
 
 // ---------- wire types ----------
 
-type itemSpec struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Type        ItemType `json:"type,omitempty"`
+// secretSpec describes one requested or supplied secret. Every field is
+// optional: an unnamed secret is numbered, and a description is only useful
+// when you are asking someone else for something.
+type secretSpec struct {
+	Name        string     `json:"name,omitempty"`
+	Description string     `json:"description,omitempty"`
+	Type        SecretType `json:"type,omitempty"`
 }
 
 type createReq struct {
-	Title       string     `json:"title"`
-	Description string     `json:"description,omitempty"`
-	Items       []itemSpec `json:"items"`
-	TTL         string     `json:"ttl,omitempty"`
+	Title       string       `json:"title,omitempty"`
+	Description string       `json:"description,omitempty"`
+	Secrets     []secretSpec `json:"secrets"`
+	TTL         string       `json:"ttl,omitempty"`
+	CallbackURL string       `json:"callback_url,omitempty"`
 }
 
 type createResp struct {
+	Title       string `json:"title"`
 	SubmitURL   string `json:"submit_url"`
 	RetrieveURL string `json:"retrieve_url"`
 	TelegramURL string `json:"telegram_url,omitempty"`
@@ -56,25 +61,25 @@ type createResp struct {
 }
 
 type viewResp struct {
-	Kind            Kind       `json:"kind"`
-	Role            string     `json:"role"`
-	Title           string     `json:"title"`
-	DescriptionHTML string     `json:"description_html,omitempty"`
-	Items           []itemView `json:"items"`
-	Fulfilled       bool       `json:"fulfilled"`
-	Retrieved       bool       `json:"retrieved"`
-	ExpiresAt       string     `json:"expires_at"`
+	Kind            Kind         `json:"kind"`
+	Role            string       `json:"role"`
+	Title           string       `json:"title"`
+	DescriptionHTML string       `json:"description_html,omitempty"`
+	Secrets         []secretView `json:"secrets"`
+	Fulfilled       bool         `json:"fulfilled"`
+	Retrieved       bool         `json:"retrieved"`
+	ExpiresAt       string       `json:"expires_at"`
 }
 
-// itemView carries the draft back to the form so a reload — or Telegram killing
-// the webview — resumes exactly where you left off. Never sent to the retrieve
-// side, which gets values only by consuming the entry.
-type itemView struct {
-	Name            string   `json:"name"`
-	DescriptionHTML string   `json:"description_html,omitempty"`
-	Type            ItemType `json:"type"`
-	Text            string   `json:"text,omitempty"`
-	Files           []string `json:"files,omitempty"`
+// secretView carries the draft back to the form so a reload — or Telegram
+// killing the webview — resumes exactly where you left off. Never sent to the
+// retrieve side, which gets values only by consuming the entry.
+type secretView struct {
+	Name            string     `json:"name"`
+	DescriptionHTML string     `json:"description_html,omitempty"`
+	Type            SecretType `json:"type"`
+	Text            string     `json:"text,omitempty"`
+	Files           []string   `json:"files,omitempty"`
 }
 
 // ---------- handlers ----------
@@ -83,10 +88,12 @@ func (a *api) getConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"max_file_bytes": a.cfg.Limits.MaxFileBytes,
 		"max_text_bytes": a.cfg.Limits.MaxTextBytes,
-		"max_files":      a.cfg.Limits.MaxFiles,
-		"ttl_options":    ttlOptions,
-		"linger":         a.cfg.Limits.Linger.String(),
+		"max_secrets":    a.cfg.Limits.MaxSecrets,
+		"ttl_options":    a.cfg.Limits.TTLOptions(),
+		"default_ttl":    a.cfg.Limits.DefaultTTLOption(),
+		"linger_seconds": int(a.cfg.Limits.Linger.Seconds()),
 		"telegram":       a.cfg.Telegram.Configured(),
+		"callbacks":      a.cfg.Callback.Enabled(),
 	})
 }
 
@@ -107,8 +114,19 @@ func (a *api) create(kind Kind) http.HandlerFunc {
 			fail(w, http.StatusBadRequest, "%v", err)
 			return
 		}
+		if req.CallbackURL != "" {
+			// Checked at creation so a caller learns immediately that its URL
+			// is not permitted, rather than at delivery time when nobody is
+			// listening for the error.
+			if err := a.cfg.Callback.Check(req.CallbackURL); err != nil {
+				fail(w, http.StatusBadRequest, "callback_url rejected: %v", err)
+				return
+			}
+			e.CallbackURL = req.CallbackURL
+		}
 		a.store.Put(e)
 		writeJSON(w, http.StatusCreated, createResp{
+			Title:       e.Title,
 			SubmitURL:   a.cfg.BaseURL + "/e/" + e.SubmitID,
 			RetrieveURL: a.cfg.BaseURL + "/e/" + e.RetrieveID,
 			TelegramURL: a.cfg.Telegram.DirectLink(e.SubmitID),
@@ -119,12 +137,12 @@ func (a *api) create(kind Kind) http.HandlerFunc {
 }
 
 func (a *api) view(w http.ResponseWriter, r *http.Request) {
-	e, role, ok := a.lookup(w, r)
+	e, rl, ok := a.lookup(w, r)
 	if !ok {
 		return
 	}
 	roleName := "retrieve"
-	if role == roleSubmit {
+	if rl == roleSubmit {
 		roleName = "submit"
 	}
 	out := viewResp{
@@ -136,19 +154,19 @@ func (a *api) view(w http.ResponseWriter, r *http.Request) {
 		Retrieved:       !e.ConsumedAt.IsZero(),
 		ExpiresAt:       e.ExpiresAt.UTC().Format(time.RFC3339),
 	}
-	for _, it := range e.Items {
-		v := itemView{
-			Name:            it.Name,
-			DescriptionHTML: renderMarkdown(it.Description),
-			Type:            it.Type,
+	for _, sec := range e.Secrets {
+		v := secretView{
+			Name:            sec.Name,
+			DescriptionHTML: renderMarkdown(sec.Description),
+			Type:            sec.Type,
 		}
-		if role == roleSubmit && !e.Fulfilled {
-			v.Text = it.Text
-			for _, f := range it.Files {
+		if rl == roleSubmit && !e.Fulfilled {
+			v.Text = sec.Text
+			for _, f := range sec.Files {
 				v.Files = append(v.Files, f.Name)
 			}
 		}
-		out.Items = append(out.Items, v)
+		out.Secrets = append(out.Secrets, v)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -224,11 +242,11 @@ func (a *api) dropFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) submit(w http.ResponseWriter, r *http.Request) {
-	e, role, ok := a.lookup(w, r)
+	e, rl, ok := a.lookup(w, r)
 	if !ok {
 		return
 	}
-	if role != roleSubmit {
+	if rl != roleSubmit {
 		fail(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -236,29 +254,32 @@ func (a *api) submit(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusConflict, "%v", err)
 		return
 	}
+	if e.CallbackURL != "" {
+		go a.cfg.Callback.Send(a.store, a.cfg.BaseURL, e)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// retrieve is also the polling endpoint for a patient caller: it answers 409
+// retrieve doubles as the polling endpoint for a patient caller: it answers 409
 // until the other side submits. Hermes can either poll this directly or poll
 // the view endpoint and call this once.
 func (a *api) retrieve(w http.ResponseWriter, r *http.Request) {
-	e, role, ok := a.lookup(w, r)
+	e, rl, ok := a.lookup(w, r)
 	if !ok {
 		return
 	}
-	if role != roleRetrieve {
+	if rl != roleRetrieve {
 		fail(w, http.StatusNotFound, "not found")
 		return
 	}
-	items, err := a.store.Retrieve(e)
+	secrets, err := a.store.Retrieve(e)
 	if err != nil {
 		fail(w, statusFor(err), "%v", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"title":        e.Title,
-		"items":        payload(a.cfg.BaseURL, items),
+		"secrets":      payload(a.cfg.BaseURL, secrets),
 		"destructs_at": e.ConsumedAt.Add(a.cfg.Limits.Linger).UTC().Format(time.RFC3339),
 	})
 }
@@ -289,22 +310,22 @@ func (a *api) lookup(w http.ResponseWriter, r *http.Request) (*Entry, role, bool
 	if !a.authorized(w, r) {
 		return nil, 0, false
 	}
-	e, role, err := a.store.Lookup(r.PathValue("id"))
+	e, rl, err := a.store.Lookup(r.PathValue("id"))
 	if err != nil {
 		fail(w, http.StatusNotFound, "not found")
 		return nil, 0, false
 	}
-	return e, role, true
+	return e, rl, true
 }
 
 // draftTarget resolves the common preconditions for every draft-editing route:
-// a valid submit token, an unsubmitted entry, and an in-range item index.
+// a valid submit token, an unsubmitted entry, and an in-range secret index.
 func (a *api) draftTarget(w http.ResponseWriter, r *http.Request) (*Entry, int, bool) {
-	e, role, ok := a.lookup(w, r)
+	e, rl, ok := a.lookup(w, r)
 	if !ok {
 		return nil, 0, false
 	}
-	if role != roleSubmit {
+	if rl != roleSubmit {
 		fail(w, http.StatusNotFound, "not found")
 		return nil, 0, false
 	}
@@ -313,8 +334,8 @@ func (a *api) draftTarget(w http.ResponseWriter, r *http.Request) (*Entry, int, 
 		return nil, 0, false
 	}
 	idx, err := strconv.Atoi(r.PathValue("idx"))
-	if err != nil || idx < 0 || idx >= len(e.Items) {
-		fail(w, http.StatusBadRequest, "bad item index")
+	if err != nil || idx < 0 || idx >= len(e.Secrets) {
+		fail(w, http.StatusBadRequest, "bad secret index")
 		return nil, 0, false
 	}
 	return e, idx, true
@@ -322,43 +343,48 @@ func (a *api) draftTarget(w http.ResponseWriter, r *http.Request) (*Entry, int, 
 
 func (a *api) countFiles(e *Entry) int {
 	n := 0
-	for _, it := range e.Items {
-		n += len(it.Files)
+	for _, sec := range e.Secrets {
+		n += len(sec.Files)
 	}
 	return n
 }
 
+// newEntry fills in everything the caller left out. Only the secrets list is
+// genuinely required: a title becomes a generated two-word name, and each
+// unnamed secret is numbered in order.
 func (a *api) newEntry(kind Kind, req createReq) (*Entry, error) {
-	if strings.TrimSpace(req.Title) == "" {
-		return nil, errors.New("title is required")
+	if len(req.Secrets) == 0 {
+		return nil, errors.New("at least one secret is required")
 	}
-	if len(req.Items) == 0 {
-		return nil, errors.New("at least one item is required")
+	if len(req.Secrets) > a.cfg.Limits.MaxSecrets {
+		return nil, fmt.Errorf("at most %d secrets", a.cfg.Limits.MaxSecrets)
 	}
-	if len(req.Items) > a.cfg.Limits.MaxFiles {
-		return nil, fmt.Errorf("at most %d items", a.cfg.Limits.MaxFiles)
-	}
-	ttl, err := parseTTL(req.TTL, a.cfg.Limits.MaxTTL)
+	ttl, err := parseTTL(req.TTL, a.cfg.Limits)
 	if err != nil {
 		return nil, err
 	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = generatedName()
+	}
 	e := &Entry{
 		Kind:        kind,
-		Title:       req.Title,
+		Title:       title,
 		Description: req.Description,
 		SubmitID:    NewID(),
 		RetrieveID:  NewID(),
 		ExpiresAt:   time.Now().Add(ttl),
 	}
-	for _, s := range req.Items {
-		if strings.TrimSpace(s.Name) == "" {
-			return nil, errors.New("every item needs a name")
+	for i, spec := range req.Secrets {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" {
+			name = fmt.Sprintf("secret-%d", i+1)
 		}
-		t := s.Type
+		t := spec.Type
 		if t != TypeFile {
 			t = TypeText
 		}
-		e.Items = append(e.Items, Item{Name: s.Name, Description: s.Description, Type: t})
+		e.Secrets = append(e.Secrets, Secret{Name: name, Description: spec.Description, Type: t})
 	}
 	return e, nil
 }

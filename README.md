@@ -6,9 +6,14 @@ Two modes, one mechanism:
 
 - **Send** — you enter a title, a description and one or more named secrets, and
   get a link to hand to someone.
-- **Request** — you describe what you need (a title plus a list of named items),
-  get a link to hand to someone, and they fill it in. Built for asking an agent's
-  operator for credentials without those credentials landing in a chat log.
+- **Request** — you describe what you need (an optional title plus a list of
+  secrets), get a link to hand to someone, and they fill it in. Built for asking
+  an agent's operator for credentials without those landing in a chat log.
+
+Almost everything is optional. A request with no title gets a generated
+two-word name; an unnamed secret becomes `secret-1`, `secret-2`, and so on;
+descriptions exist only where they help. The one required field is the list of
+secrets itself.
 
 Every entry has two independent tokens: a **submit** token and a **retrieve**
 token. In request mode you hand out the submit link; in send mode you hand out
@@ -39,6 +44,7 @@ trade: **run this only on a network you trust.**
   possession of the URL, that would be a hole.
 - **Markdown is rendered with raw HTML escaped.** Descriptions are
   attacker-supplied as soon as anything can reach the create endpoint.
+- **Callbacks are rule-gated and off by default.** See below.
 
 ## API
 
@@ -48,13 +54,15 @@ Create a request — this is the endpoint an agent calls:
 curl -X POST https://secrets.example/api/requests -H 'Content-Type: application/json' -d '{
   "title": "DigitalOcean deploy credentials",
   "description": "Needed for the MCP server config.",
-  "items": [
+  "secrets": [
     {"name": "DO_API_TOKEN", "description": "read+write, no expiry"},
     {"name": "deploy key",   "description": "the private key file", "type": "file"}
   ],
   "ttl": "1h"
 }'
 ```
+
+The smallest useful request is just `{"secrets": [{}]}`.
 
 ```jsonc
 {
@@ -82,7 +90,7 @@ until the entry self-destructs — an agent should not be handed a base64 blob.
 {
   "title": "DigitalOcean deploy credentials",
   "destructs_at": "2026-09-03T13:59:56Z",
-  "items": [
+  "secrets": [
     {"name": "DO_API_TOKEN", "type": "text", "text": "dop_v1_..."},
     {"name": "deploy key", "type": "file",
      "files": [{"filename": "id_ed25519", "size": 411, "url": ".../api/f/lzzulu..."}]}
@@ -96,12 +104,62 @@ until the entry self-destructs — an agent should not be handed a base64 blob.
 | `POST /api/secrets` | Create a send (you provide the content) |
 | `GET /api/e/{id}` | View / poll. Returns the draft for a submit token only |
 | `PUT /api/e/{id}/text/{idx}` | Autosave one field |
-| `POST /api/e/{id}/files/{idx}` | Upload a file to one item (multipart) |
+| `POST /api/e/{id}/files/{idx}` | Upload a file to one secret (multipart) |
 | `DELETE /api/e/{id}/files/{idx}/{n}` | Remove a drafted file |
 | `POST /api/e/{id}/submit` | Finalise the draft |
 | `POST /api/e/{id}/retrieve` | Consume; `409` while pending |
 | `GET /api/f/{token}` | Download a file |
 | `GET /api/config` | Limits and TTL options, for the frontend |
+
+## Callbacks
+
+Instead of polling, a caller can pass `callback_url` and be pushed the payload
+the moment the other side submits:
+
+```jsonc
+{"secrets": [{"name": "DO_API_TOKEN"}], "callback_url": "http://hermes:9119/hook"}
+```
+
+A caller-supplied URL is a "make my server issue a request" primitive, so the
+feature is **off until you write a rule** saying what is allowed.
+`CHARON_CALLBACK_RULE` is a [rulekit](https://github.com/qpoint-io/rulekit)
+expression evaluated against the URL's parts:
+
+| Field | Example | Notes |
+|---|---|---|
+| `url` | `http://hermes:9119/hook` | the whole thing |
+| `scheme` | `http` | only `http`/`https` ever reach the rule |
+| `host` | `hermes:9119` | as written, port included |
+| `hostname` | `hermes` | no port; IPv6 debracketed |
+| `port` | `9119` | a number — defaults to 80/443 when the URL omits it |
+| `path`, `query`, `fragment`, `user` | `/hook` | |
+| `ip` | `192.168.0.3` | **only when the host is a literal IP** |
+
+```sh
+CHARON_CALLBACK_RULE='hostname == "hermes" and port == 9119'
+CHARON_CALLBACK_RULE='scheme == "https" and hostname matches /\.internal$/'
+CHARON_CALLBACK_RULE='ip in 192.168.0.0/16'
+CHARON_CALLBACK_RULE='hostname in ["hermes", "localhost"]'
+CHARON_CALLBACK_RULE='true'   # allow anything — only on a trusted network
+```
+
+The rule is parsed at startup, so a typo is a refusal to boot rather than a
+surprise at request time. Evaluation **fails closed**: a rule error, or a rule
+naming a field the URL cannot supply, rejects the callback. Only a clean pass
+allows it. URLs are checked at creation, so a caller finds out immediately.
+
+`ip` is populated only for literal addresses — **charon never resolves DNS
+here**. Resolving would be a rebinding hole: a name could satisfy the rule and
+then point elsewhere by delivery time. A CIDR rule therefore only matches URLs
+that already carry an address.
+
+Set `CHARON_CALLBACK_SECRET` to sign deliveries. Each request carries
+`X-Charon-Timestamp` and `X-Charon-Signature: sha256=<hex>`, the HMAC-SHA256 of
+`timestamp + "." + body`, so a receiver can reject both forgeries and replays.
+
+Delivery is retried three times. If every attempt fails the entry is released
+rather than consumed, so the retrieve link still works — a webhook that happened
+to be down does not destroy the secret.
 
 ## Telegram Mini App
 
@@ -134,15 +192,22 @@ The server verifies it (HMAC-SHA256 under a `WebAppData`-derived key, plus an
 | `CHARON_SCRATCH_DIR` | a fresh temp dir | Where file bytes go |
 | `CHARON_MAX_TEXT_BYTES` | `65536` | Per-field text cap |
 | `CHARON_MAX_FILE_BYTES` | `16777216` | Per-file cap |
-| `CHARON_MAX_FILES` | `20` | Files per entry, and items per entry |
+| `CHARON_MAX_FILES` | `20` | Files per entry |
+| `CHARON_MAX_SECRETS` | `20` | Secrets per entry |
 | `CHARON_MAX_TOTAL_BYTES` | `268435456` | Global ceiling across all live entries |
-| `CHARON_MAX_TTL` | `168h` | Longest expiry a caller may ask for |
+| `CHARON_DEFAULT_TTL` | `24h` | Expiry when the caller does not ask for one |
+| `CHARON_MAX_TTL` | `7d` | Longest expiry a caller may ask for |
 | `CHARON_LINGER` | `60s` | Grace period after the first read |
+| `CHARON_CALLBACK_RULE` | — | rulekit expression; unset disables callbacks |
+| `CHARON_CALLBACK_SECRET` | — | HMAC key for signing callback deliveries |
 | `CHARON_TELEGRAM_BOT_TOKEN` | — | Enables initData verification |
 | `CHARON_TELEGRAM_BOT_NAME` | — | Bot username, for `telegram_url` |
 | `CHARON_TELEGRAM_APP_NAME` | — | Mini App short name |
 | `CHARON_TELEGRAM_ALLOWED_USERS` | — | Comma-separated Telegram user IDs |
 | `CHARON_TELEGRAM_REQUIRED` | `false` | Reject calls with no valid initData |
+
+Durations (`CHARON_DEFAULT_TTL`, `CHARON_MAX_TTL`, `CHARON_LINGER`) accept `d`
+and `w` in addition to Go's own units, so `7d` and `1w` both work.
 
 With no bot token set the API is unauthenticated by design — put it on a trusted
 network, or in front of a reverse proxy that authenticates.

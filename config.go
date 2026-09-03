@@ -2,10 +2,13 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	rulekit "github.com/qpoint-io/rulekit/v2"
 )
 
 type Config struct {
@@ -14,6 +17,7 @@ type Config struct {
 	Scratch  string
 	Limits   Limits
 	Telegram Telegram
+	Callback Callback
 }
 
 func LoadConfig() (Config, error) {
@@ -22,10 +26,11 @@ func LoadConfig() (Config, error) {
 		BaseURL: strings.TrimSuffix(env("CHARON_BASE_URL", "http://localhost:1337"), "/"),
 		Scratch: env("CHARON_SCRATCH_DIR", ""),
 		Limits: Limits{
-			MaxTextBytes:  envBytes("CHARON_MAX_TEXT_BYTES", 64<<10),
-			MaxFileBytes:  envBytes("CHARON_MAX_FILE_BYTES", 16<<20),
-			MaxFiles:      int(envBytes("CHARON_MAX_FILES", 20)),
-			MaxTotalBytes: envBytes("CHARON_MAX_TOTAL_BYTES", 256<<20),
+			MaxTextBytes:  envInt("CHARON_MAX_TEXT_BYTES", 64<<10),
+			MaxFileBytes:  envInt("CHARON_MAX_FILE_BYTES", 16<<20),
+			MaxFiles:      int(envInt("CHARON_MAX_FILES", 20)),
+			MaxSecrets:    int(envInt("CHARON_MAX_SECRETS", 20)),
+			MaxTotalBytes: envInt("CHARON_MAX_TOTAL_BYTES", 256<<20),
 		},
 		Telegram: Telegram{
 			BotToken: env("CHARON_TELEGRAM_BOT_TOKEN", ""),
@@ -33,15 +38,32 @@ func LoadConfig() (Config, error) {
 			AppName:  env("CHARON_TELEGRAM_APP_NAME", ""),
 			Required: env("CHARON_TELEGRAM_REQUIRED", "") == "true",
 		},
+		Callback: Callback{
+			Secret: env("CHARON_CALLBACK_SECRET", ""),
+			Client: &http.Client{Timeout: 15 * time.Second},
+		},
 	}
 
 	var err error
-	if c.Limits.MaxTTL, err = time.ParseDuration(env("CHARON_MAX_TTL", "168h")); err != nil {
+	if c.Limits.DefaultTTL, err = parseDuration(env("CHARON_DEFAULT_TTL", "24h")); err != nil {
+		return c, fmt.Errorf("CHARON_DEFAULT_TTL: %w", err)
+	}
+	if c.Limits.MaxTTL, err = parseDuration(env("CHARON_MAX_TTL", "7d")); err != nil {
 		return c, fmt.Errorf("CHARON_MAX_TTL: %w", err)
 	}
-	if c.Limits.Linger, err = time.ParseDuration(env("CHARON_LINGER", "60s")); err != nil {
+	if c.Limits.Linger, err = parseDuration(env("CHARON_LINGER", "60s")); err != nil {
 		return c, fmt.Errorf("CHARON_LINGER: %w", err)
 	}
+
+	// Callbacks stay off until an operator writes a rule. Parsing here rather
+	// than per-request means a typo is a refusal to boot, not a surprise
+	// rejection the first time an agent tries to use the feature.
+	if rule := env("CHARON_CALLBACK_RULE", ""); rule != "" {
+		if c.Callback.Rule, err = rulekit.Parse(rule); err != nil {
+			return c, fmt.Errorf("CHARON_CALLBACK_RULE: %w", err)
+		}
+	}
+
 	for _, id := range strings.Split(env("CHARON_TELEGRAM_ALLOWED_USERS", ""), ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			n, err := strconv.ParseInt(id, 10, 64)
@@ -64,9 +86,9 @@ func env(key, def string) string {
 	return def
 }
 
-// envBytes reads a plain integer. Suffixed sizes would be nicer, but every
-// value here is set once in a Compose file and never typed again.
-func envBytes(key string, def int64) int64 {
+// envInt reads a plain integer. Suffixed sizes would be nicer, but every value
+// here is set once in a Compose file and never typed again.
+func envInt(key string, def int64) int64 {
 	v := os.Getenv(key)
 	if v == "" {
 		return def

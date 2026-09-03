@@ -10,7 +10,9 @@ func testLimits() Limits {
 		MaxTextBytes:  1 << 10,
 		MaxFileBytes:  1 << 10,
 		MaxFiles:      4,
+		MaxSecrets:    4,
 		MaxTotalBytes: 1 << 20,
+		DefaultTTL:    time.Hour,
 		MaxTTL:        time.Hour,
 		Linger:        30 * time.Second,
 	}
@@ -20,7 +22,7 @@ func newTestEntry(s *Store, ttl time.Duration) *Entry {
 	e := &Entry{
 		Kind:       KindRequest,
 		Title:      "t",
-		Items:      []Item{{Name: "one", Type: TypeText}},
+		Secrets:    []Secret{{Name: "one", Type: TypeText}},
 		SubmitID:   NewID(),
 		RetrieveID: NewID(),
 		ExpiresAt:  time.Now().Add(ttl),
@@ -152,29 +154,39 @@ func TestSetTextRespectsCeiling(t *testing.T) {
 	if err := s.SetText(e, 0, "abcde"); err != ErrFull {
 		t.Fatalf("want ErrFull past the limit, got %v", err)
 	}
-	if e.Items[0].Text != "abcd" {
-		t.Fatalf("rejected write mutated the item: %q", e.Items[0].Text)
+	if e.Secrets[0].Text != "abcd" {
+		t.Fatalf("rejected write mutated the item: %q", e.Secrets[0].Text)
 	}
 }
 
 func TestParseTTL(t *testing.T) {
-	max := 7 * 24 * time.Hour
+	l := Limits{DefaultTTL: 24 * time.Hour, MaxTTL: 7 * 24 * time.Hour}
 	for in, want := range map[string]time.Duration{
-		"":    time.Hour,
+		"":    24 * time.Hour, // the documented default
 		"15m": 15 * time.Minute,
 		"6h":  6 * time.Hour,
 		"3d":  72 * time.Hour,
-		"1w":  max,
+		"1w":  l.MaxTTL,
 	} {
-		got, err := parseTTL(in, max)
+		got, err := parseTTL(in, l)
 		if err != nil || got != want {
 			t.Errorf("parseTTL(%q) = %v, %v; want %v", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"2w", "0d", "-1h", "banana", "1y"} {
-		if _, err := parseTTL(in, max); err == nil {
+	for _, in := range []string{"2w", "8d", "0d", "-1h", "banana", "1y"} {
+		if _, err := parseTTL(in, l); err == nil {
 			t.Errorf("parseTTL(%q) accepted an invalid or over-cap value", in)
 		}
+	}
+
+	// A ceiling below the default must clamp rather than hand out more time
+	// than the operator allows.
+	tight := Limits{DefaultTTL: 24 * time.Hour, MaxTTL: time.Hour}
+	if got, _ := parseTTL("", tight); got != time.Hour {
+		t.Errorf("default TTL under a tight ceiling = %v, want 1h", got)
+	}
+	if opts := tight.TTLOptions(); len(opts) != 2 || opts[1] != "1h" {
+		t.Errorf("TTLOptions under a 1h ceiling = %v, want [15m 1h]", opts)
 	}
 }
 

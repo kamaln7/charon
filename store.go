@@ -20,11 +20,11 @@ const (
 	KindRequest Kind = "request"
 )
 
-type ItemType string
+type SecretType string
 
 const (
-	TypeText ItemType = "text"
-	TypeFile ItemType = "file"
+	TypeText SecretType = "text"
+	TypeFile SecretType = "file"
 )
 
 var (
@@ -35,12 +35,12 @@ var (
 	ErrFull      = errors.New("server at capacity")
 )
 
-// Item is one named thing being asked for. Spec fields come from the creator;
+// Secret is one named thing being asked for. Spec fields come from the creator;
 // Text and Files are filled in by the submitter.
-type Item struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Type        ItemType `json:"type"`
+type Secret struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description,omitempty"`
+	Type        SecretType `json:"type"`
 
 	Text  string `json:"text,omitempty"`
 	Files []File `json:"files,omitempty"`
@@ -57,10 +57,11 @@ type Entry struct {
 	Kind        Kind
 	Title       string
 	Description string
-	Items       []Item
+	Secrets     []Secret
 
-	SubmitID   string
-	RetrieveID string
+	SubmitID    string
+	RetrieveID  string
+	CallbackURL string
 
 	Fulfilled bool
 	ExpiresAt time.Time
@@ -69,7 +70,7 @@ type Entry struct {
 	// for Limits.Linger afterwards so a client that drops the connection, or an
 	// agent that retries, can ask again. Then it self-destructs.
 	ConsumedAt time.Time
-	minted     []Item
+	minted     []Secret
 
 	bytes int64
 }
@@ -100,7 +101,9 @@ type Limits struct {
 	MaxTextBytes  int64
 	MaxFileBytes  int64
 	MaxFiles      int
+	MaxSecrets    int
 	MaxTotalBytes int64
+	DefaultTTL    time.Duration
 	MaxTTL        time.Duration
 	// Linger is how long a retrieved entry stays readable before it destroys
 	// itself. Burn-strictly-on-first-byte breaks any client that retries.
@@ -188,7 +191,7 @@ func (s *Store) Submit(e *Entry) error {
 // Retrieve hands back the payload. The first call starts the linger clock and
 // mints one-shot download tokens; later calls inside the window return exactly
 // the same thing, so a retry or a dropped connection is not a lost secret.
-func (s *Store) Retrieve(e *Entry) ([]Item, error) {
+func (s *Store) Retrieve(e *Entry) ([]Secret, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !e.Fulfilled {
@@ -196,8 +199,8 @@ func (s *Store) Retrieve(e *Entry) ([]Item, error) {
 	}
 	if e.ConsumedAt.IsZero() {
 		e.ConsumedAt = time.Now()
-		e.minted = make([]Item, len(e.Items))
-		copy(e.minted, e.Items)
+		e.minted = make([]Secret, len(e.Secrets))
+		copy(e.minted, e.Secrets)
 		for i := range e.minted {
 			files := make([]File, len(e.minted[i].Files))
 			copy(files, e.minted[i].Files)
@@ -209,6 +212,14 @@ func (s *Store) Retrieve(e *Entry) ([]Item, error) {
 		}
 	}
 	return e.minted, nil
+}
+
+// Unconsume reopens an entry whose delivery failed, so the retrieve link keeps
+// working instead of the secret self-destructing into a webhook that was down.
+func (s *Store) Unconsume(e *Entry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e.ConsumedAt = time.Time{}
 }
 
 // TakeFile resolves a download token. Tokens survive until the entry itself is
@@ -223,23 +234,23 @@ func (s *Store) TakeFile(token string) (File, error) {
 	return f, nil
 }
 
-// AddFile spools a drafted file onto an item.
+// AddFile spools a drafted file onto a secret.
 func (s *Store) AddFile(e *Entry, idx int, f File) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e.Items[idx].Files = append(e.Items[idx].Files, f)
+	e.Secrets[idx].Files = append(e.Secrets[idx].Files, f)
 	e.bytes += f.Size
 }
 
 // DropFile removes a drafted file and reclaims its bytes.
 func (s *Store) DropFile(e *Entry, idx, n int) error {
 	s.mu.Lock()
-	if e.Fulfilled || idx < 0 || idx >= len(e.Items) || n < 0 || n >= len(e.Items[idx].Files) {
+	if e.Fulfilled || idx < 0 || idx >= len(e.Secrets) || n < 0 || n >= len(e.Secrets[idx].Files) {
 		s.mu.Unlock()
 		return ErrNotFound
 	}
-	f := e.Items[idx].Files[n]
-	e.Items[idx].Files = append(e.Items[idx].Files[:n], e.Items[idx].Files[n+1:]...)
+	f := e.Secrets[idx].Files[n]
+	e.Secrets[idx].Files = append(e.Secrets[idx].Files[:n], e.Secrets[idx].Files[n+1:]...)
 	e.bytes -= f.Size
 	s.total -= f.Size
 	s.mu.Unlock()
@@ -250,17 +261,17 @@ func (s *Store) DropFile(e *Entry, idx, n int) error {
 	return nil
 }
 
-// SetText replaces one item's text. This is the autosave path: the form PUTs
+// SetText replaces one secret's text. This is the autosave path: the form PUTs
 // each field as you type, so backgrounding Telegram costs nothing. Only the
 // growth is charged, checked under the same lock that applies it.
 func (s *Store) SetText(e *Entry, idx int, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delta := int64(len(text)) - int64(len(e.Items[idx].Text))
+	delta := int64(len(text)) - int64(len(e.Secrets[idx].Text))
 	if delta > 0 && s.total+delta > s.limits.MaxTotalBytes {
 		return ErrFull
 	}
-	e.Items[idx].Text = text
+	e.Secrets[idx].Text = text
 	e.bytes += delta
 	s.total += delta
 	return nil
@@ -272,7 +283,7 @@ func (s *Store) destroy(e *Entry) {
 	delete(s.byID, e.SubmitID)
 	delete(s.byID, e.RetrieveID)
 	var paths []string
-	for _, it := range e.Items {
+	for _, it := range e.Secrets {
 		for _, f := range it.Files {
 			if f.path != "" {
 				paths = append(paths, f.path)
