@@ -2,14 +2,32 @@
    buttons, cards, inputs, labels, badges, colour tokens, dark mode — comes
    from basecoat.css. */
 
+/* One spacing scale. Every gap below is one of these, so the rhythm stays
+   consistent instead of being re-guessed per component. */
+:root {
+  --gap-section: 2.25rem;  /* between top-level blocks of a view */
+  --gap-stack: 1.15rem;    /* between fields inside one block */
+  --gap-card: .6rem;       /* between rows inside a card */
+  --pad-card: .95rem;      /* inside a card we use as a plain container */
+}
+
 main {
   max-width: 32rem;
   margin: 0 auto;
   padding: 2rem 1.15rem calc(4rem + env(safe-area-inset-bottom));
 }
 
-section { margin-top: 2.25rem; }
-.stack > * + * { margin-top: 1.15rem; }
+/* A view's blocks are <section>s. Basecoat also uses <section> inside .empty,
+   .item and .card, so those are excluded by name rather than by nesting path —
+   the sections sit at varying depths inside the form wrappers. */
+section { margin-top: var(--gap-section); }
+.empty, .item > section, .card > section { margin-top: 0; }
+.stack > * + * { margin-top: var(--gap-stack); }
+
+/* Basecoat cards are flex columns with a 24px gap and 24px block padding,
+   sized for header/section/footer children. Ours hold arbitrary content, so
+   they get the scale's padding and gap and no child needs its own margin. */
+.card { padding: var(--pad-card); gap: var(--gap-card); }
 
 h1 {
   font-size: 1.45rem;
@@ -44,9 +62,9 @@ h1 {
 
 .nav { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: 1.75rem; }
 .back { padding-left: 0; margin-bottom: .75rem; }
-.nav .card { padding: .95rem .8rem; text-align: left; cursor: pointer; gap: 0; }
+.nav .card { padding: var(--pad-card) .8rem; text-align: left; cursor: pointer; gap: .12rem; }
 .nav .t { display: block; font-weight: 600; font-size: .95rem; }
-.nav .d { display: block; font-size: .78rem; color: var(--muted-foreground); margin-top: .12rem; }
+.nav .d { display: block; font-size: .78rem; color: var(--muted-foreground); }
 
 /* ---------- expiry radio group ---------- */
 
@@ -67,11 +85,14 @@ h1 {
 
 /* ---------- secret rows ---------- */
 
-.adders { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
+.adders { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: var(--gap-stack); }
 .adders .lbl { font-size: .82rem; color: var(--muted-foreground); }
 
-.row { padding: .95rem; margin-bottom: .6rem; gap: 0; }
-.row-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .6rem; }
+.row { margin-bottom: var(--gap-card); }
+.row-head { display: flex; align-items: center; gap: .5rem; }
+/* The body of a row stacks its own controls; the card gap only separates the
+   head from the body. */
+.row [data-body] { display: flex; flex-direction: column; gap: var(--gap-card); }
 /* The name reads as a heading until you touch it, so an untouched row does not
    look like an unfinished form. */
 .row-head .input {
@@ -84,7 +105,7 @@ h1 {
 
 /* Basecoat's .empty is sized for a full-page state; here it is one small
    placeholder inside a form. */
-.empty { margin-bottom: .75rem; padding: 1.75rem 1rem; }
+.empty { margin-bottom: var(--gap-card); padding: 1.75rem 1rem; }
 .empty h3 { font-size: .95rem; }
 .empty p { font-size: .85rem; }
 
@@ -107,9 +128,8 @@ h1 {
 
 /* ---------- links and reveal ---------- */
 
-.card { gap: 0; }
 .card.keep { border-color: var(--primary); background: var(--accent); }
-.card-head { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
+.card-head { display: flex; align-items: center; gap: .5rem; }
 
 /* Both circles share one colour: two steps of the same instruction, not two
    different kinds of thing. */

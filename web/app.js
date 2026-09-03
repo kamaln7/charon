@@ -368,7 +368,7 @@ function submitForm(id, e) {
   const view = el(`
     <div>
       <h1>${esc(e.title)}</h1>
-      ${e.description_html ? `<div class="md" style="margin-top:.5rem">${e.description_html}</div>` : '<p class="lede">Fill these in and submit.</p>'}
+      ${e.description_html ? `<div class="md lede">${e.description_html}</div>` : '<p class="lede">Fill these in and submit.</p>'}
       <form id="f"><section id="rows"></section></form>
     </div>`);
   const form = view.querySelector('#f');
@@ -381,7 +381,7 @@ function submitForm(id, e) {
           <strong style="flex:1;font-size:.9rem">${esc(sec.name)}</strong>
           <span class="status" data-status></span>
         </div>
-        ${sec.description_html ? `<div class="md" style="margin-bottom:.6rem">${sec.description_html}</div>` : ''}
+        ${sec.description_html ? `<div class="md">${sec.description_html}</div>` : ''}
         <div data-body></div>
       </div>`);
     const status = row.querySelector('[data-status]');
@@ -414,7 +414,7 @@ function submitForm(id, e) {
     }
 
     body.append(
-      el(`<label class="drop" style="margin-top:.6rem">Attach files<input type="file" data-file multiple></label>
+      el(`<label class="drop">Attach files<input type="file" data-file multiple></label>
           <div class="item-group" data-list></div>`)
     );
     const list = body.querySelector('[data-list]');
@@ -504,7 +504,7 @@ function retrieveView(id, e) {
   const view = el(`
     <div>
       <h1>${esc(e.title)}</h1>
-      ${e.description_html ? `<div class="md" style="margin-top:.5rem">${e.description_html}</div>` : ''}
+      ${e.description_html ? `<div class="md lede">${e.description_html}</div>` : ''}
       <p class="lede">Revealing this destroys it ${lingerText()} later.</p>
       <section><button type="button" class="btn btn-block" id="reveal">Reveal</button></section>
     </div>`);
@@ -533,7 +533,7 @@ function revealed(got) {
     if (sec.text) {
       const pre = el('<pre class="value"></pre>');
       pre.textContent = sec.text;
-      const bar = el('<div style="margin-top:.5rem"></div>');
+      const bar = el('<div></div>');
       bar.append(copyButton(sec.text));
       card.append(pre, bar);
     }

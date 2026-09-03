@@ -10,3 +10,6 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      # The Go tests never parse the frontend, so a syntax error in app.js
+      # would otherwise ship and only surface as a blank page.
+      - run: node --check web/app.js && node --check web/theme.js
