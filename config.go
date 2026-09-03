@@ -16,7 +16,6 @@ type Config struct {
 	BaseURL  string
 	Scratch  string
 	Limits   Limits
-	Telegram Telegram
 	Callback Callback
 }
 
@@ -31,10 +30,6 @@ func LoadConfig() (Config, error) {
 			MaxFiles:      int(envInt("CHARON_MAX_FILES", 20)),
 			MaxSecrets:    int(envInt("CHARON_MAX_SECRETS", 20)),
 			MaxTotalBytes: envInt("CHARON_MAX_TOTAL_BYTES", 256<<20),
-		},
-		Telegram: Telegram{
-			BotName: env("CHARON_TELEGRAM_BOT_NAME", ""),
-			AppName: env("CHARON_TELEGRAM_APP_NAME", ""),
 		},
 		Callback: Callback{
 			Secret: env("CHARON_CALLBACK_SECRET", ""),

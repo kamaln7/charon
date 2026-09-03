@@ -77,7 +77,6 @@ The smallest useful request is just `{"secrets": [{}]}`.
 {
   "submit_url":   "https://secrets.example/e/fwlascooqxofa2ekujikwweq",  // hand this out
   "retrieve_url": "https://secrets.example/e/po3nkmdgisdb5veespq6hfph",  // keep this
-  "telegram_url": "https://t.me/yourbot/secrets?startapp=fwlascoo...",   // if configured
   "poll_url":     "https://secrets.example/api/e/po3nkmdgisdb5veespq6hfph",
   "manage_url":   "https://secrets.example/manage?token=kwwyvma5t53x4ulperhpuamo",
   "expires_at":   "2026-09-03T14:59:51Z"
@@ -173,24 +172,28 @@ to be down does not destroy the secret.
 
 ## Telegram Mini App
 
-The frontend runs as a [Mini App](https://core.telegram.org/bots/webapps), so a
-bot can send you a link that opens the form inline in the chat.
+The frontend works as a [Mini App](https://core.telegram.org/bots/webapps)
+without charon knowing anything about your bot.
 
-1. In BotFather: `/newapp`, pick your bot, give it a short name (e.g. `secrets`)
-   and point it at your charon URL.
-2. Set `CHARON_TELEGRAM_BOT_NAME` and `CHARON_TELEGRAM_APP_NAME`.
-3. `telegram_url` now comes back on every create. A bot only needs to send it as
-   **plain text** — no inline-keyboard payload — and Telegram renders an Open
-   button. The ID travels in `?startapp=`, which the page reads back as
-   `initDataUnsafe.start_param`.
+1. In BotFather: `/newapp`, pick your bot, short name (e.g. `secrets`), URL
+   pointing at your charon.
+2. Link straight to one entry by appending the submit token as `startapp`:
+
+   ```
+   https://t.me/<bot>/<app>?startapp=<the id from submit_url>
+   ```
+
+   Telegram hands that back to the page as `initDataUnsafe.start_param`, which
+   is the only Mini App wiring charon has. A bot can send the link as plain
+   text — no inline-keyboard payload needed.
+
+charon does **not** verify Telegram identities, and holds no bot token or bot
+name: possession of a link is the whole security model. Whoever owns the bot
+composes the `t.me` link, because they are the one who knows its name.
 
 > The page is loaded by **your device**, not by Telegram's servers. If charon is
 > only reachable on a LAN or a VPN, the Mini App works only when your phone is on
 > that network. The TLS certificate must be publicly trusted either way.
-
-The Mini App is a convenience, not an authentication scheme: the page is an
-ordinary web page and charon does not verify Telegram identities. Possession of
-a link is the only credential.
 
 ## Configuration
 
@@ -209,8 +212,6 @@ a link is the only credential.
 | `CHARON_LINGER` | `60s` | Grace period after the first read |
 | `CHARON_CALLBACK_RULE` | — | rulekit expression; unset disables callbacks |
 | `CHARON_CALLBACK_SECRET` | — | HMAC key for signing callback deliveries |
-| `CHARON_TELEGRAM_BOT_NAME` | — | Bot username, for `telegram_url` |
-| `CHARON_TELEGRAM_APP_NAME` | — | Mini App short name |
 
 Durations (`CHARON_DEFAULT_TTL`, `CHARON_MAX_TTL`, `CHARON_LINGER`) accept `d`
 and `w` in addition to Go's own units, so `7d` and `1w` both work.

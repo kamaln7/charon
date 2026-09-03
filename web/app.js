@@ -345,9 +345,6 @@ function manageView(created) {
         step: 1,
         label: 'Send this to whoever has the secrets',
         url: created.submit_url,
-        note: created.telegram_url
-          ? `Telegram: <a href="${esc(created.telegram_url)}">open in the chat</a>`
-          : '',
       }),
       linkCard({
         step: 2,

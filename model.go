@@ -41,7 +41,6 @@ type CreateResponse struct {
 	Title       string `json:"title"`
 	SubmitURL   string `json:"submit_url"`
 	RetrieveURL string `json:"retrieve_url"`
-	TelegramURL string `json:"telegram_url,omitempty"`
 	// PollURL is the view endpoint under another name, so a caller reading the
 	// response sees the flow: poll it until fulfilled, then POST RetrieveURL.
 	PollURL string `json:"poll_url"`
@@ -66,7 +65,6 @@ type EntryResponse struct {
 	// Only populated for the manage role: the links the owner hands out.
 	SubmitURL   string `json:"submit_url,omitempty"`
 	RetrieveURL string `json:"retrieve_url,omitempty"`
-	TelegramURL string `json:"telegram_url,omitempty"`
 }
 
 type SecretResponse struct {
@@ -105,7 +103,6 @@ type ConfigResponse struct {
 	TTLOptions    []string `json:"ttl_options"`
 	DefaultTTL    string   `json:"default_ttl"`
 	LingerSeconds int      `json:"linger_seconds"`
-	Telegram      bool     `json:"telegram"`
 	Callbacks     bool     `json:"callbacks"`
 }
 
@@ -129,7 +126,6 @@ func (c Config) createResponse(e *Entry) CreateResponse {
 		Title:       e.Title,
 		SubmitURL:   c.BaseURL + "/e/" + e.SubmitID,
 		RetrieveURL: c.BaseURL + "/e/" + e.RetrieveID,
-		TelegramURL: c.Telegram.DirectLink(e.SubmitID),
 		PollURL:     c.BaseURL + "/api/e/" + e.RetrieveID,
 		ManageURL:   c.BaseURL + "/manage?token=" + e.ManageID,
 		ExpiresAt:   rfc3339(e.ExpiresAt),
@@ -150,7 +146,6 @@ func (c Config) entryResponse(e *Entry, rl role) EntryResponse {
 	if rl == roleManage {
 		out.SubmitURL = c.BaseURL + "/e/" + e.SubmitID
 		out.RetrieveURL = c.BaseURL + "/e/" + e.RetrieveID
-		out.TelegramURL = c.Telegram.DirectLink(e.SubmitID)
 	}
 	draft := rl == roleSubmit && !e.Fulfilled
 	for _, sec := range e.Secrets {
@@ -194,7 +189,6 @@ func (c Config) configResponse() ConfigResponse {
 		TTLOptions:    c.Limits.TTLOptions(),
 		DefaultTTL:    c.Limits.DefaultTTLOption(),
 		LingerSeconds: int(c.Limits.Linger.Seconds()),
-		Telegram:      c.Telegram.Configured(),
 		Callbacks:     c.Callback.Enabled(),
 	}
 }
