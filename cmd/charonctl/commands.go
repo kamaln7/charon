@@ -7,14 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/kamaln7/charon/internal/api"
 )
 
 // pollWait is how long each long-poll asks the server to hold. The server
-// caps it (max_wait_seconds in /api/config); asking for more is harmless.
+// caps it at a minute; asking for more is harmless.
 const pollWait = 30 * time.Second
 
 func cmdRequest(c *client, stdin io.Reader, stdout, stderr io.Writer, await bool, timeout, cleanup time.Duration) error {
@@ -78,24 +77,14 @@ func cmdAwait(c *client, stdout, stderr io.Writer, handle string, timeout time.D
 }
 
 func collect(c *client, handle string, timeout time.Duration) (*receipt, error) {
-	// A server without ?wait= answers immediately; looping on that would be a
-	// busy loop, so fall back to sleeping between plain polls.
-	cfg, err := c.config()
-	if err != nil {
-		return nil, err
-	}
-	wait := min(pollWait, time.Duration(cfg.MaxWaitSeconds)*time.Second)
-
 	deadline := time.Now().Add(timeout)
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return nil, fail(exitTimeout, "timed out after %s waiting for %s", timeout, handle)
 		}
-		if wait == 0 {
-			time.Sleep(min(time.Second, remaining))
-		}
-		view, err := c.view(handle, min(wait, remaining))
+		start := time.Now()
+		view, err := c.view(handle, min(pollWait, remaining))
 		var ae *apiError
 		if errors.As(err, &ae) && ae.status == 404 {
 			return nil, fail(exitTimeout, "request %s has expired or was already collected", handle)
@@ -105,6 +94,10 @@ func collect(c *client, handle string, timeout time.Duration) (*receipt, error) 
 		}
 		if view.Fulfilled {
 			break
+		}
+		// A server without ?wait= answers at once; do not spin on it.
+		if time.Since(start) < time.Second {
+			time.Sleep(time.Second)
 		}
 	}
 	payload, err := c.retrieve(handle)
@@ -137,15 +130,20 @@ func cmdGet(stdout io.Writer, handle, name, to, mode string) error {
 	if err != nil {
 		return fail(exitError, "--mode %q is not octal", mode)
 	}
-	if err := os.WriteFile(to, b, os.FileMode(perm)); err != nil {
+	// Create private, fix the mode, then write: the bytes are never on disk
+	// under a umask-widened mode, and an existing file is tightened first.
+	f, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
 		return err
 	}
-	// WriteFile honours the umask on creation and leaves an existing file's
-	// mode alone; chmod makes --mode mean what it says either way.
-	if err := os.Chmod(to, os.FileMode(perm)); err != nil {
+	defer f.Close()
+	if err := f.Chmod(os.FileMode(perm)); err != nil {
 		return err
 	}
-	return nil
+	if _, err := f.Write(b); err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 func cmdCleanup(handle string, after time.Duration) error {
@@ -166,7 +164,7 @@ func scheduleCleanup(handle string, after time.Duration) error {
 	}
 	cmd := exec.Command(exe, "cleanup", "--after", after.String(), handle)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	detach(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

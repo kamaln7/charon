@@ -68,10 +68,9 @@ type Entry struct {
 
 // finish closes done exactly once. Callers hold the store lock.
 func (e *Entry) finish() {
-	select {
-	case <-e.done:
-	default:
+	if e.done != nil {
 		close(e.done)
+		e.done = nil
 	}
 }
 
@@ -207,11 +206,25 @@ func (s *Store) Submit(e *Entry) error {
 }
 
 // Done reports when waiting on an entry is pointless: it fires on submission
-// and on destruction, so a viewer blocked on it wakes either way.
+// and on destruction, so a viewer blocked on it wakes either way. An entry
+// that is already finished yields a closed channel.
 func (s *Store) Done(e *Entry) <-chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if e.done == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
 	return e.done
+}
+
+// view runs a read of the entry under the store lock, so a response is never
+// built while a submission is landing on the same fields.
+func (s *Store) view(e *Entry, read func() api.EntryResponse) api.EntryResponse {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return read()
 }
 
 // Retrieve hands back the payload. The first call starts the linger clock and

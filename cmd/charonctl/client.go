@@ -42,11 +42,7 @@ type apiError struct {
 func (e *apiError) Error() string { return fmt.Sprintf("%s (HTTP %d)", e.msg, e.status) }
 
 func (c *client) do(method, path string, body io.Reader, ctype string, out any) error {
-	u := path
-	if !strings.HasPrefix(path, "http") {
-		u = c.base + path
-	}
-	req, err := http.NewRequest(method, u, body)
+	req, err := http.NewRequest(method, c.base+path, body)
 	if err != nil {
 		return err
 	}
@@ -101,12 +97,6 @@ func (c *client) view(id string, wait time.Duration) (api.EntryResponse, error) 
 	}
 	var out api.EntryResponse
 	err := c.do("GET", path, nil, "", &out)
-	return out, err
-}
-
-func (c *client) config() (api.ConfigResponse, error) {
-	var out api.ConfigResponse
-	err := c.do("GET", "/api/config", nil, "", &out)
 	return out, err
 }
 

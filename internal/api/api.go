@@ -1,16 +1,10 @@
 // Package api holds the wire contract charon speaks: every request and
-// response body, the enumerations they carry, and the duration syntax TTLs are
-// written in. The server and charonctl both import it, so the two cannot drift.
+// response body and the enumerations they carry. The server and charonctl
+// both import it, so the two cannot drift.
 //
 // Nothing here is built from map[string]any: the wire shape is the contract,
 // so it lives in types.
 package api
-
-import (
-	"fmt"
-	"strconv"
-	"time"
-)
 
 // Kind is cosmetic: it tells the frontend which side of the link the visitor is
 // on. Both modes are the same machine underneath — an entry with a submit token
@@ -127,9 +121,7 @@ type ConfigResponse struct {
 	TTLOptions    []string `json:"ttl_options"`
 	DefaultTTL    string   `json:"default_ttl"`
 	LingerSeconds int      `json:"linger_seconds"`
-	// MaxWaitSeconds is the longest a GET /api/e/{id}?wait= will block.
-	MaxWaitSeconds int  `json:"max_wait_seconds"`
-	Callbacks      bool `json:"callbacks"`
+	Callbacks     bool     `json:"callbacks"`
 }
 
 type UploadResponse struct {
@@ -143,42 +135,4 @@ type OKResponse struct {
 
 type ErrorResponse struct {
 	Error string `json:"error"`
-}
-
-// ParseDuration extends time.ParseDuration with d and w, which it refuses to
-// support but every human writing a TTL expects.
-func ParseDuration(s string) (time.Duration, error) {
-	if s == "" {
-		return 0, fmt.Errorf("empty duration")
-	}
-	if last := s[len(s)-1]; last == 'd' || last == 'w' {
-		n, err := strconv.Atoi(s[:len(s)-1])
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("invalid duration %q", s)
-		}
-		unit := 24 * time.Hour
-		if last == 'w' {
-			unit = 7 * 24 * time.Hour
-		}
-		return time.Duration(n) * unit, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("invalid duration %q", s)
-	}
-	return d, nil
-}
-
-// HumanDuration renders a duration the way it would have been written. Go's
-// String() turns a 7-day cap into "168h0m0s", which is a poor thing to put in
-// an error someone has to read.
-func HumanDuration(d time.Duration) string {
-	switch {
-	case d%(7*24*time.Hour) == 0:
-		return strconv.FormatInt(int64(d/(7*24*time.Hour)), 10) + "w"
-	case d%(24*time.Hour) == 0:
-		return strconv.FormatInt(int64(d/(24*time.Hour)), 10) + "d"
-	default:
-		return d.String()
-	}
 }

@@ -91,9 +91,8 @@ form renders one control per secret accordingly.
 
 Then **wait on `poll_url` until `fulfilled` is true** and `POST` the retrieve
 URL once. `?wait=30s` turns the poll into a long poll: the response is held
-until the other side submits, the entry dies, or the window (capped at 60s,
-see `max_wait_seconds` in `/api/config`) elapses, then answers as a plain GET
-would. Loop on it instead of sleeping between requests.
+until the other side submits, the entry dies, or the window (capped at 60s)
+elapses, then answers as a plain GET would. Loop on it instead of sleeping between requests.
 
 ```console
 curl "https://secrets.example/api/e/<retrieve_id>?wait=30s"  # {"fulfilled": false, ...}

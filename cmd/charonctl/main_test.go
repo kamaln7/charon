@@ -24,8 +24,8 @@ func TestMain(m *testing.M) {
 	os.Exit(testMain(m))
 }
 
-// testMain exists so that cleanup runs: os.Exit skips deferred calls, and a
-// server child left holding stderr keeps `go test` waiting a minute.
+// testMain exists so that the deferred cleanup runs: os.Exit skips defers,
+// which would leave the server child running and the temp dir behind.
 func testMain(m *testing.M) int {
 	tmp, err := os.MkdirTemp("", "charonctl-test-")
 	if err != nil {
@@ -282,6 +282,37 @@ func TestShellQuote(t *testing.T) {
 	} {
 		if got := shellQuote(in); got != want {
 			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+// Names reach --env unquoted. A receipt from an entry charonctl did not create
+// may carry any name the server accepted, so --env must refuse rather than
+// hand eval a command.
+func TestEnvRefusesUnsafeNames(t *testing.T) {
+	dir := t.TempDir()
+	r := &receipt{dir: dir, Secrets: []receiptSecret{{Name: "X=$(id) #", Type: api.TypeText}}}
+	os.WriteFile(r.valuePath(0), []byte("v"), 0o600)
+	if _, err := r.envLines(); err == nil {
+		t.Fatal("envLines accepted an unsafe name")
+	}
+	// get still works: the name is only data there.
+	if _, b, err := r.value("X=$(id) #"); err != nil || string(b) != "v" {
+		t.Errorf("value = %q, %v", b, err)
+	}
+}
+
+// Handles are base32 and may start with a digit; the receipt path check must
+// accept every id charon can mint and nothing that could escape the directory.
+func TestHandleShape(t *testing.T) {
+	for _, ok := range []string{"4rdzmmbuqvs4tkzm7d3hcl4p", "abcdefghijklmnopqrstuvwx"} {
+		if _, err := receiptDir(ok); err != nil {
+			t.Errorf("rejected valid handle %q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"../etc", "ABCDEFGHIJKLMNOPQRSTUVWX", "short", "abcdefghijklmnopqrstuvw1"} {
+		if _, err := receiptDir(bad); err == nil {
+			t.Errorf("accepted %q", bad)
 		}
 	}
 }

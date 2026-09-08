@@ -88,7 +88,7 @@ func (s *server) viewEntry(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
-	writeJSON(w, http.StatusOK, s.cfg.entryResponse(e, rl))
+	writeJSON(w, http.StatusOK, s.store.view(e, func() api.EntryResponse { return s.cfg.entryResponse(e, rl) }))
 	return nil
 }
 

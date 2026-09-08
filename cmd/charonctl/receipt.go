@@ -40,8 +40,12 @@ const manifestName = "manifest.json"
 // caller can still fix it, not at eval time in a shell.
 var identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// handleShape is charon's id format: 24 characters of lowercase base32. It is
+// checked before the handle becomes part of a path.
+var handleShape = regexp.MustCompile(`^[a-z2-7]{24}$`)
+
 func receiptDir(handle string) (string, error) {
-	if !identifier.MatchString(handle) {
+	if !handleShape.MatchString(handle) {
 		return "", fmt.Errorf("handle %q is not a charon id", handle)
 	}
 	base := os.Getenv("CHARON_SCRATCH")
@@ -70,14 +74,32 @@ func loadReceipt(handle string) (*receipt, error) {
 // storeReceipt writes the payload to a fresh 0700 directory. Files are
 // downloaded here and now: the first retrieval starts charon's self-destruct
 // timer, so leaving them for later is leaving them to expire.
+//
+// It builds in a temporary directory and renames into place, so a failure
+// midway leaves nothing behind that a later run would mistake for a receipt.
 func storeReceipt(c *client, handle string, payload api.RevealResponse) (*receipt, error) {
 	dir, err := receiptDir(handle)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	tmp, err := os.MkdirTemp(filepath.Dir(dir), ".charonctl-")
+	if err != nil {
 		return nil, err
 	}
+	defer os.RemoveAll(tmp)
+	r, err := writeReceipt(c, tmp, payload)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		return nil, err
+	}
+	r.dir = dir
+	return r, nil
+}
+
+func writeReceipt(c *client, dir string, payload api.RevealResponse) (*receipt, error) {
+	var err error
 	r := &receipt{dir: dir, Title: payload.Title}
 	for i, sec := range payload.Secrets {
 		rs := receiptSecret{Name: sec.Name, Type: sec.Type}
@@ -136,11 +158,18 @@ func (r *receipt) value(name string) (receiptSecret, []byte, error) {
 // become NAME='value'; files become NAME_FILE='path' so a key never has to
 // pass through a variable. Blank secrets are omitted, and reported on stderr
 // by the caller, so `${NAME:?}` in the consuming script does the right thing.
+//
+// Names are checked here as well as at request time: the entry may have been
+// created by something other than charonctl, and a name is interpolated
+// unquoted, so an unchecked one would be command injection through eval.
 func (r *receipt) envLines() (string, error) {
 	var b strings.Builder
 	for i, sec := range r.Secrets {
 		if sec.Blank {
 			continue
+		}
+		if !identifier.MatchString(sec.Name) {
+			return "", fmt.Errorf("secret name %q is not a shell identifier; use get instead of --env", sec.Name)
 		}
 		if sec.Type == api.TypeFile {
 			fmt.Fprintf(&b, "export %s_FILE=%s\n", sec.Name, shellQuote(r.valuePath(i)))

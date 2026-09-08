@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -66,21 +65,6 @@ Flags go before positional arguments.
 CHARON_API is the server (default http://localhost:1337).
 CHARON_SCRATCH is where collected values are kept (default the temp dir).`
 
-// parse accepts flags before or after positional arguments. Go's flag package
-// stops at the first positional, which would make `await HANDLE --env` silently
-// ignore --env; leading positionals are moved after the flags instead.
-func parse(fs *flag.FlagSet, args []string) error {
-	var pos, flags []string
-	for i, a := range args {
-		if strings.HasPrefix(a, "-") {
-			flags = args[i:]
-			break
-		}
-		pos = append(pos, a)
-	}
-	return fs.Parse(append(flags, pos...))
-}
-
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fail(exitError, "%s", usage)
@@ -94,7 +78,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		wait := fs.Bool("await", false, "wait for the answer after printing the link")
 		timeout := fs.Duration("timeout", 24*time.Hour, "how long --await waits")
 		cleanup := fs.Duration("cleanup-after", 10*time.Minute, "when --await removes collected values")
-		if err := parse(fs, rest); err != nil {
+		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		return cmdRequest(c, stdin, stdout, stderr, *wait, *timeout, *cleanup)
@@ -104,7 +88,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		timeout := fs.Duration("timeout", 24*time.Hour, "give up after this long")
 		env := fs.Bool("env", false, "print export lines for eval")
 		cleanup := fs.Duration("cleanup-after", 10*time.Minute, "remove collected values after this long")
-		if err := parse(fs, rest); err != nil {
+		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
@@ -116,7 +100,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		fs.SetOutput(stderr)
 		to := fs.String("to", "", "write the value to this path instead of stdout")
 		mode := fs.String("mode", "0600", "file mode for --to")
-		if err := parse(fs, rest); err != nil {
+		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		if fs.NArg() != 2 {
@@ -127,7 +111,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		after := fs.Duration("after", 0, "wait this long first")
-		if err := parse(fs, rest); err != nil {
+		if err := fs.Parse(rest); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
