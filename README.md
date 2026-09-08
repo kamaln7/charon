@@ -134,6 +134,44 @@ until the entry self-destructs — an agent should not be handed a base64 blob.
 | `GET /api/f/{token}` | Download a file |
 | `GET /api/config` | Limits and TTL options, for the frontend |
 
+## charonctl
+
+`cmd/charonctl` is the client an agent runs so it never has to touch the API
+or see a secret. Install it with `go install github.com/kamaln7/charon/cmd/charonctl@latest`
+and point it at your server with `CHARON_API`.
+
+```console
+$ echo '{"secrets":[{"name":"DO_TOKEN"},{"name":"DEPLOY_KEY","type":"file"}]}' \
+    | charonctl request
+LINK https://secrets.example/e/fwlascooqxofa2ekujikwweq
+EXPIRES 2026-09-04T13:59:51Z
+HANDLE po3nkmdgisdb5veespq6hfph
+
+$ eval "$(charonctl await --env po3nkmdgisdb5veespq6hfph)"
+collected "quiet-otter"
+set DO_TOKEN (71 chars)
+file DEPLOY_KEY (id_ed25519, 411 bytes)
+receipt /tmp/charonctl-po3nkmdgisdb5veespq6hfph
+
+$ charonctl get --to ~/.ssh/deploy --mode 0600 po3nkmdgisdb5veespq6hfph DEPLOY_KEY
+$ charonctl cleanup po3nkmdgisdb5veespq6hfph
+```
+
+- `request` takes the same JSON as `POST /api/requests`, defaults the TTL to
+  `1d`, and insists every name is a shell identifier, because `--env` turns
+  them into variables. `--await` continues straight into `await`.
+- `await` long-polls, collects once, and keeps the values in a private
+  receipt directory (`CHARON_SCRATCH`, default the temp dir). Later calls
+  answer from the receipt, so charon's linger window never matters. What was
+  set goes to stderr, values never do; `--env` writes `export` lines to
+  stdout, files as `NAME_FILE=path`. The receipt is removed after
+  `--cleanup-after` (default 10m) by a detached copy of the process.
+- `get` reads one value, to stdout or to a path. Exit code 3 means the user
+  left it blank.
+- `send` takes `{"secrets":[{"name":..,"text":..}|{"name":..,"file":path}]}`,
+  fills the entry, and prints the retrieve link.
+- Exit codes: 0 fine, 1 error, 2 timed out or expired, 3 blank.
+
 ## Callbacks
 
 Instead of polling, a caller can pass `callback_url` and be pushed the payload
