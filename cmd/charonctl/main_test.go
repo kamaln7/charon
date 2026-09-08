@@ -613,10 +613,3 @@ func TestSendLinger(t *testing.T) {
 		t.Fatal("send accepted linger over the server cap")
 	}
 }
-
-func TestOldHandleFlag(t *testing.T) {
-	_, _, err := runCtl(t, "", "await", "--handle", "aaaaaaaaaaaaaaaaaaaaaaaa")
-	if err == nil || !strings.Contains(err.Error(), "--retrieve-handle or --manage-handle") {
-		t.Fatalf("old --handle: %v", err)
-	}
-}

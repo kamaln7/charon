@@ -141,11 +141,10 @@ A Charon restart loses pending exchanges; collected local receipts still work
 until deleted. Create a new request when the exchange has expired or
 been lost, or when the receipt is gone and Charon reports already collected.
 
-### Other errors and limits
+### Other errors
 
 - Exit codes: `0` success, `1` error (reason on stderr), `2` timed out/expired
   or no receipt, `3` blank field selected by `get` or `exec-env`. Once started,
   `exec-env` returns the command's exit status.
-- Unknown JSON fields are errors; `type` must be `text` or `file`.
-- Default limits: 20 secrets, 16 MB per file; deployments may override them.
-  TTLs: `15m`, `1h`, `6h`, `1d`, `3d`, `1w`.
+
+If validation fails, use the CLI’s error message to correct the request.

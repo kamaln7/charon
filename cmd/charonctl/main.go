@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -199,9 +198,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
-		if looksLikeOldHandleFlag(err) {
-			return fail(exitError, "--handle was renamed to --retrieve-handle or --manage-handle")
-		}
 		return err
 	}
 	if verb != "exec-env" && fs.NArg() != 0 {
@@ -279,11 +275,4 @@ func flagPassed(fs *flag.FlagSet, name string) bool {
 		}
 	})
 	return found
-}
-
-func looksLikeOldHandleFlag(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "-handle") &&
-		!strings.Contains(msg, "retrieve-handle") &&
-		!strings.Contains(msg, "manage-handle")
 }

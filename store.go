@@ -404,11 +404,9 @@ func (s *Store) destroy(e *Entry) []string {
 // belonged to it. Returns nil when nothing expired.
 func (s *Store) Sweep(now time.Time) []string {
 	s.mu.Lock()
-	seen := make(map[*Entry]bool)
 	var dead []*Entry
 	for _, r := range s.byID {
-		if !seen[r.entry] && now.After(r.entry.deadline()) {
-			seen[r.entry] = true
+		if r.role == roleSubmit && now.After(r.entry.deadline()) {
 			dead = append(dead, r.entry)
 		}
 	}

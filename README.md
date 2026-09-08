@@ -1,7 +1,6 @@
 # charon
 
-One-way delivery for secrets. Nothing is persisted, nothing survives a restart.
-You run this yourself: there is no public instance.
+One-way, short-lived delivery for secrets. Self-hosted; there is no public instance.
 
 Two modes, one mechanism:
 
@@ -29,40 +28,25 @@ in send mode you hand out the retrieve link. Creating either redirects you to
 `/manage?token=…`, which is bookmarkable — a refresh still shows your links
 instead of losing them to page state.
 
-## Why not yopass
-
-yopass encrypts in the browser, which means the link has to carry the key and
-looks like `#/s/<id>/<key>`. charon holds plaintext in memory instead, so links
-are a single opaque ID — and the server can read every secret. That is the whole
-trade: **run this only on a network you trust.**
-
 ## Server
 
-The process you run. charonctl talks to it over HTTP and does not read these
-environment variables.
+The server can read every secret. The API is unauthenticated: possession of a
+link grants access. Run it on a trusted network or behind an authenticating proxy.
 
 ### Behaviour worth knowing
 
-- **In memory only.** Text lives in the process; file bytes go to a scratch
-  directory, encrypted with `CHARON_SECRET_KEY` (mount a tmpfs over it). A
-  restart drops everything, including half-finished drafts.
-- **Drafts autosave.** Text PUTs live in process memory; files are spooled to
-  the scratch directory the moment they are picked. An unsubmitted draft dies
-  with the entry TTL (the reaper deletes the in-memory row and the scratch
-  files). A restart drops everything sooner.
-- **Retrieval lingers, then self-destructs.** Create-time `linger` (default
-  `0`) is how long the payload stays readable after the first retrieve.
-  `0` means the next lookup misses and Sweep deletes the entry and its files
-  (about a second later, which is enough for charonctl to download files).
-  A Mini App or mobile browser needs a copy window: pass `"linger": "60s"`.
-  `CHARON_LINGER` is the maximum a caller may request, not the default.
-- **IDs are random, not sequential.** 120 bits of `crypto/rand` in base32, which
-  looks like an [xid](https://github.com/rs/xid) but cannot be enumerated. A real
-  xid encodes a timestamp and a counter; on a service whose only security is
-  possession of the URL, that would be a hole.
-- **Markdown is rendered with raw HTML escaped.** Descriptions are
-  attacker-supplied as soon as anything can reach the create endpoint.
-- **Callbacks are rule-gated and off by default.** See below.
+- Text and draft state live in memory; uploaded files are encrypted in the
+  scratch directory with `CHARON_SECRET_KEY`. Mount a tmpfs there. A server
+  restart loses all exchanges.
+- Draft text autosaves and files upload when selected. Unsubmitted drafts and
+  their files expire with the entry TTL.
+- Create-time `linger` defaults to `0`: the next lookup after retrieval misses,
+  and the reaper deletes the entry and files on its next tick (every second).
+  Download files immediately. For a browser copy window, request `"linger": "60s"`.
+  `CHARON_LINGER` caps this window; the web UI requests that maximum.
+- Tokens contain 120 random bits, encoded as lowercase base32.
+- Markdown descriptions have raw HTML escaped.
+- Callbacks are off until configured below.
 
 ### API
 
@@ -208,11 +192,6 @@ App, the page reads `start_param` as the entry id. Charon holds no bot token
 and does not check identities: possession of the link is still the whole
 security model.
 
-Create with `"linger": "60s"`. The default is `0` (gone on first read), which
-is what charonctl wants; a Mini App that backgrounds before the user copies
-every value needs the copy window. The web UI sends the server maximum
-(`CHARON_LINGER`, default 60s) for the same reason.
-
 ### Configuration
 
 Environment variables for the `charon` binary.
@@ -236,10 +215,6 @@ Environment variables for the `charon` binary.
 
 Durations (`CHARON_DEFAULT_TTL`, `CHARON_MAX_TTL`, `CHARON_LINGER`) accept `d`
 and `w` in addition to Go's own units, so `7d` and `1w` both work.
-
-**The API is unauthenticated by design.** Possession of a link is the whole
-security model. Run charon on a trusted network, or behind a reverse proxy that
-authenticates.
 
 ### Running
 
@@ -315,40 +290,24 @@ $ charonctl get --to ~/.ssh/deploy --mode 0600 --retrieve-handle po3nkmdgisdb5ve
 $ charonctl cleanup --retrieve-handle po3nkmdgisdb5veespq6hfph
 ```
 
-- `request` takes the same JSON as `POST /api/requests`, defaults the TTL to
-  `1d`, and insists every name is a shell identifier, because `--env` turns
-  them into variables. `--await` continues straight into `await`. `--timeout`
-  and `--cleanup-after` require `--await`.
-- `await` long-polls, collects once, and keeps the values in a private
-  receipt directory. Later calls answer from the receipt, so the server linger
-  window never matters. What was set goes to stderr, values never do; `--env`
-  writes `export` lines to stdout, files as `NAME_FILE=path`. The receipt is
-  removed after `--cleanup-after` (default 10m) by a detached copy of the
-  process.
-- `get` reads one value, to stdout or to a path. Exit code 3 means the user
-  left it blank.
-- `exec-env --retrieve-handle RETRIEVE_HANDLE [--name NAME ...] -- COMMAND [ARG ...]` runs a
-  command with collected secrets in its environment, without shell evaluation.
-  Repeat `--name` to allowlist receipt field names; omit it to select all.
-  Text becomes `NAME`, files become `NAME_FILE` pointing into the receipt.
-  Selected values override inherited variables; other inherited variables stay.
-  This selects receipt secrets, not an isolated environment. Unknown names,
-  skipped fields, NUL text, and colliding variable names fail before execution.
-  Receipt expiry is unchanged; copy files with `get --to` if needed longer.
-  On Unix the command replaces charonctl, preserving signals and exit status.
-- `send` reads JSON on stdin. Each secret needs exactly one source: `text`
-  (inline), `env` (variable name), `file` (one path uploaded as a file),
-  `files` (a list of paths on one secret), or `text_file` (path read as text,
-  bytes unchanged). Optional `type` must match the source; it is not a source
-  of its own. Optional `linger` (default `0`). Sources are resolved before
-  the entry is created. Prints `TITLE`, the retrieve `LINK`, and
-  `MANAGE_HANDLE`. A fill or submit failure destroys the draft.
-- `status --manage-handle MANAGE_HANDLE` reprints `LINK` and whether the
-  entry is fulfilled. `--retrieve-handle` reports the same without the share
-  link.
-- `destroy --manage-handle MANAGE_HANDLE` deletes the exchange on the server.
-  `cleanup --retrieve-handle RETRIEVE_HANDLE` deletes the local receipt.
-- Exit codes: 0 fine, 1 error, 2 timed out or expired, 3 blank.
+| Command | Purpose |
+|---|---|
+| `request` | Create a request; `--await` also collects the answer |
+| `await` | Collect into a local receipt; `--env` emits shell exports containing secrets |
+| `get` | Read a receipt value; `--to PATH` saves it to a file |
+| `exec-env` | Run a command with receipt secrets; repeat `--name` to select fields |
+| `send` | Create, fill, and submit a send from JSON sources |
+| `status` | Show exchange state; a manage handle also returns the share link |
+| `destroy` | Delete the server exchange using its manage handle |
+| `cleanup` | Delete the local receipt using its retrieve handle |
+
+Receipts are private local files, deleted after `--cleanup-after` (default 10m).
+Repeated `await` calls reuse the receipt without extending its lifetime. Copy
+files with `get --to` if needed longer; if cleanup scheduling warns, run `cleanup`.
+
+Use `charonctl COMMAND --help` for flags and input formats. The
+[agent skill](skills/charon-secrets/SKILL.md) covers source selection, safe
+consumption, cancellation, and recovery.
 
 ## Development
 
@@ -357,39 +316,13 @@ go test ./...
 go run .
 ```
 
-The frontend is static files under `web/`, embedded with `//go:embed`. No build
-step, no bundler, no npm.
+The static frontend in `web/` is embedded with `//go:embed`; no build step.
+`go test` checks JavaScript syntax when Node is installed.
 
-Styling is [Basecoat](https://basecoatui.com) 1.0.2, vendored as
-`web/basecoat.css` — the standalone CDN build, which has Tailwind already
-compiled in. It is copied into the repo rather than hotlinked so the UI works on
-a network with no route to a CDN. Two things to know if you touch it:
-
-- **The bundle ships Basecoat's component classes only, not Tailwind's
-  utilities.** `w-full`, `text-sm` and friends do not exist; anything
-  utility-shaped lives in `style.css`.
-- **Dark mode keys off `html.dark`, not `prefers-color-scheme`**, so `theme.js`
-  wires the media query up by hand. It is a separate file because the CSP is
-  `script-src 'self'` and loosening that for one inline script would be the
-  wrong trade on a page that displays secrets.
-
-| File | Holds |
-|---|---|
-| `main.go` | wiring, scratch setup, the reaper |
-| `server.go` | routes, middleware, handler plumbing |
-| `handlers.go` | one function per endpoint |
-| `model.go` | conversions between store types and the wire API |
-| `internal/api` | wire request and response types |
-| `store.go` | entries, tokens, byte accounting — memory only |
-| `scratch.go` | the disk side: expiry-encoded filenames and sweeps |
-| `callback.go`, `ttl.go`, `config.go`, `names.go` | as named |
-
-Scratch filenames are `<unix expiry>-<random>`. The store deletes files as
-their entries die, but it only knows about entries this process created — a
-crash or a SIGKILL with a persistent scratch mount leaves orphans nothing would
-collect. Encoding the deadline in the name means a sweep needs no state: read
-the directory, parse the prefix, delete what is past due. That runs on a timer
-and again at startup.
+[Basecoat](https://basecoatui.com) 1.0.2 is vendored in `web/basecoat.css`.
+It includes component classes, not Tailwind utilities; custom styles live in
+`style.css`. Dark mode uses `html.dark`, set by the external `theme.js` to
+respect the CSP.
 
 ## License
 

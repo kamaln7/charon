@@ -260,10 +260,6 @@ func writeCleanupHandle(handle string) (string, error) {
 		os.Remove(name)
 		return "", err
 	}
-	if err := os.Chmod(name, 0o600); err != nil {
-		os.Remove(name)
-		return "", err
-	}
 	return name, nil
 }
 
