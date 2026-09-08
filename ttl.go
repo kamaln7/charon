@@ -37,6 +37,31 @@ func (l Limits) DefaultTTLOption() string {
 	return ""
 }
 
+// parseLinger defaults to zero when omitted. The operator's CHARON_LINGER is
+// a ceiling, not a default: agents want burn-on-read, a Mini App wants a
+// copy window and must ask for one.
+func parseLinger(s string, l Limits) (time.Duration, error) {
+	if s == "" || s == "0" || s == "0s" {
+		return 0, nil
+	}
+	d, err := parseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	if d > l.Linger {
+		return 0, fmt.Errorf("linger %s exceeds the maximum of %s", s, humanDuration(l.Linger))
+	}
+	return d, nil
+}
+
+// parseNonNegativeDuration accepts 0, unlike parseDuration which is for TTLs.
+func parseNonNegativeDuration(s string) (time.Duration, error) {
+	if s == "0" || s == "0s" {
+		return 0, nil
+	}
+	return parseDuration(s)
+}
+
 // parseTTL defaults when omitted and rejects anything past the ceiling.
 func parseTTL(s string, l Limits) (time.Duration, error) {
 	if s == "" {

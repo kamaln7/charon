@@ -22,7 +22,7 @@ Every entry has three independent tokens:
 |---|---|---|
 | **submit** | whoever fills the form in | write the draft, submit it once |
 | **retrieve** | whoever reads the payload | consume the secret, once |
-| **manage** | the creator | read back the other two links, nothing else |
+| **manage** | the creator | read back the other two links, or destroy the entry |
 
 Holding one never grants another. In request mode you hand out the submit link;
 in send mode you hand out the retrieve link. Creating either redirects you to
@@ -36,18 +36,26 @@ looks like `#/s/<id>/<key>`. charon holds plaintext in memory instead, so links
 are a single opaque ID — and the server can read every secret. That is the whole
 trade: **run this only on a network you trust.**
 
-## Behaviour worth knowing
+## Server
+
+The process you run. charonctl talks to it over HTTP and does not read these
+environment variables.
+
+### Behaviour worth knowing
 
 - **In memory only.** Text lives in the process; file bytes go to a scratch
-  directory (mount a tmpfs over it). A restart drops everything, including
-  half-finished drafts.
-- **Drafts autosave.** The submit form PUTs each field as you type, so a
-  mobile webview being suspended mid-form costs nothing. Files upload the
-  moment they are picked.
-- **Retrieval lingers, then self-destructs.** The first read starts a timer
-  (`CHARON_LINGER`, default 60s); reads inside that window return the identical
-  payload, and afterwards the entry and its files are gone. Burning strictly on
-  the first byte breaks any client that retries or drops a connection.
+  directory, encrypted with `CHARON_SECRET_KEY` (mount a tmpfs over it). A
+  restart drops everything, including half-finished drafts.
+- **Drafts autosave.** Text PUTs live in process memory; files are spooled to
+  the scratch directory the moment they are picked. An unsubmitted draft dies
+  with the entry TTL (the reaper deletes the in-memory row and the scratch
+  files). A restart drops everything sooner.
+- **Retrieval lingers, then self-destructs.** Create-time `linger` (default
+  `0`) is how long the payload stays readable after the first retrieve.
+  `0` means the next lookup misses and Sweep deletes the entry and its files
+  (about a second later, which is enough for charonctl to download files).
+  A Mini App or mobile browser needs a copy window: pass `"linger": "60s"`.
+  `CHARON_LINGER` is the maximum a caller may request, not the default.
 - **IDs are random, not sequential.** 120 bits of `crypto/rand` in base32, which
   looks like an [xid](https://github.com/rs/xid) but cannot be enumerated. A real
   xid encodes a timestamp and a counter; on a service whose only security is
@@ -56,7 +64,7 @@ trade: **run this only on a network you trust.**
   attacker-supplied as soon as anything can reach the create endpoint.
 - **Callbacks are rule-gated and off by default.** See below.
 
-## API
+### API
 
 Create a request — this is the endpoint an agent calls:
 
@@ -68,7 +76,8 @@ curl -X POST https://charon.example/api/requests -H 'Content-Type: application/j
     {"name": "API_TOKEN", "description": "read+write, no expiry"},
     {"name": "deploy key",   "description": "the private key file", "type": "file"}
   ],
-  "ttl": "1h"
+  "ttl": "1h",
+  "linger": "0s"
 }'
 ```
 
@@ -82,17 +91,21 @@ form renders one control per secret accordingly.
 
 ```jsonc
 {
+  "title":        "Deploy credentials",
   "submit_url":   "https://charon.example/e/fwlascooqxofa2ekujikwweq",  // hand this out
   "retrieve_url": "https://charon.example/e/po3nkmdgisdb5veespq6hfph",  // keep this
   "poll_url":     "https://charon.example/api/e/po3nkmdgisdb5veespq6hfph",
   "manage_url":   "https://charon.example/manage?token=kwwyvma5t53x4ulperhpuamo",
+  "destroy_url":  "https://charon.example/api/e/kwwyvma5t53x4ulperhpuamo",
+  "submit_id":    "fwlascooqxofa2ekujikwweq",
+  "retrieve_id":  "po3nkmdgisdb5veespq6hfph",
+  "manage_id":    "kwwyvma5t53x4ulperhpuamo",
   "expires_at":   "2026-09-03T14:59:51Z"
 }
 ```
 
 Then **wait on `poll_url` until `fulfilled` is true** and POST
-`/api/e/{id}/retrieve` using the retrieve id (the last path segment of
-`poll_url` or `retrieve_url`). `?wait=30s` turns the poll into a long poll:
+`/api/e/{id}/retrieve` using `retrieve_id`. `?wait=30s` turns the poll into a long poll:
 the response is held until the other side submits, the entry dies, or the
 window (capped at 60s) elapses, then answers as a plain GET would. Loop on it
 instead of sleeping between requests.
@@ -133,72 +146,11 @@ until the entry self-destructs — an agent should not be handed a base64 blob.
 | `DELETE /api/e/{id}/files/{idx}/{n}` | Remove a drafted file |
 | `POST /api/e/{id}/submit` | Finalise the draft |
 | `POST /api/e/{id}/retrieve` | Consume; `409` while pending |
+| `DELETE /api/e/{id}` | Destroy; manage token only (`destroy_url`) |
 | `GET /api/f/{token}` | Download a file |
 | `GET /api/config` | Limits and TTL options, for the frontend |
 
-## charonctl
-
-`cmd/charonctl` is the client an agent runs so it never has to touch the API
-or see a secret. Install it with `go install github.com/kamaln7/charon/cmd/charonctl@latest`
-and configure your server in `$XDG_CONFIG_HOME/charonctl/config.json` (default
-`~/.config/charonctl/config.json`, also on macOS):
-
-```json
-{"api":"https://charon.example"}
-```
-
-`CHARON_API` overrides `api`; without either, the server defaults to
-`http://localhost:1337`. A missing config is fine; unreadable or malformed
-config files are errors, including unknown fields and trailing JSON.
-Relative `XDG_CONFIG_HOME` values are ignored. `get`, `cleanup`, `exec-env`, and help
-work without reading the server config.
-
-Operands use named flags. `request` and `send` read their JSON spec from stdin.
-
-```console
-$ echo '{"secrets":[{"name":"API_TOKEN"},{"name":"DEPLOY_KEY","type":"file"}]}' \
-    | charonctl request
-LINK https://charon.example/e/fwlascooqxofa2ekujikwweq
-EXPIRES 2026-09-04T13:59:51Z
-HANDLE po3nkmdgisdb5veespq6hfph
-
-$ charon_exports=$(charonctl await --env --handle po3nkmdgisdb5veespq6hfph) || exit "$?"
-collected "quiet-otter"
-set API_TOKEN (71 chars)
-file DEPLOY_KEY (id_ed25519, 411 bytes)
-receipt ~/.cache/charonctl/charonctl-po3nkmdgisdb5veespq6hfph
-$ eval "$charon_exports"
-$ unset charon_exports
-
-$ charonctl get --to ~/.ssh/deploy --mode 0600 --handle po3nkmdgisdb5veespq6hfph --name DEPLOY_KEY
-$ charonctl cleanup --handle po3nkmdgisdb5veespq6hfph
-```
-
-- `request` takes the same JSON as `POST /api/requests`, defaults the TTL to
-  `1d`, and insists every name is a shell identifier, because `--env` turns
-  them into variables. `--await` continues straight into `await`.
-- `await` long-polls, collects once, and keeps the values in a private
-  receipt directory (`CHARON_SCRATCH`, default the user cache). Later calls
-  answer from the receipt, so charon's linger window never matters. What was
-  set goes to stderr, values never do; `--env` writes `export` lines to
-  stdout, files as `NAME_FILE=path`. The receipt is removed after
-  `--cleanup-after` (default 10m) by a detached copy of the process.
-- `get` reads one value, to stdout or to a path. Exit code 3 means the user
-  left it blank.
-- `exec-env --handle HANDLE [--name NAME ...] -- COMMAND [ARG ...]` runs a
-  command with collected secrets in its environment, without shell evaluation.
-  Repeat `--name` to allowlist receipt field names; omit it to select all.
-  Text becomes `NAME`, files become `NAME_FILE` pointing into the receipt.
-  Selected values override inherited variables; other inherited variables stay.
-  This selects receipt secrets, not an isolated environment. Unknown names,
-  skipped fields, NUL text, and colliding variable names fail before execution.
-  Receipt expiry is unchanged; copy files with `get --to` if needed longer.
-  On Unix the command replaces charonctl, preserving signals and exit status.
-- `send` takes `{"secrets":[{"name":..,"text":..}|{"name":..,"file":path}]}`,
-  fills the entry, and prints the retrieve link.
-- Exit codes: 0 fine, 1 error, 2 timed out or expired, 3 blank.
-
-## Callbacks
+### Callbacks
 
 Instead of polling, a caller can pass `callback_url` and be pushed the payload
 the moment the other side submits:
@@ -248,7 +200,7 @@ Delivery is retried three times. If every attempt fails the entry is released
 rather than consumed, so the retrieve link still works — a webhook that happened
 to be down does not destroy the secret.
 
-## Hermes
+### Hermes
 
 A typical pairing is Hermes (or any bot) that delivers the submit link and,
 optionally, receives `callback_url`. If that link is opened as a Telegram Mini
@@ -256,13 +208,21 @@ App, the page reads `start_param` as the entry id. Charon holds no bot token
 and does not check identities: possession of the link is still the whole
 security model.
 
-## Configuration
+Create with `"linger": "60s"`. The default is `0` (gone on first read), which
+is what charonctl wants; a Mini App that backgrounds before the user copies
+every value needs the copy window. The web UI sends the server maximum
+(`CHARON_LINGER`, default 60s) for the same reason.
+
+### Configuration
+
+Environment variables for the `charon` binary.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `CHARON_ADDR` | `:1337` | Listen address |
 | `CHARON_BASE_URL` | `http://localhost:1337` | Public origin, used to build links |
-| `CHARON_SCRATCH_DIR` | a fresh temp dir | Where file bytes go |
+| `CHARON_SCRATCH_DIR` | a fresh temp dir | Uploaded file bytes, encrypted. Mount a tmpfs here. |
+| `CHARON_SECRET_KEY` | random at startup | Encrypts scratch files. Unset generates an ephemeral key; those files are unreadable after a restart. |
 | `CHARON_MAX_TEXT_BYTES` | `65536` | Per-field text cap |
 | `CHARON_MAX_FILE_BYTES` | `16777216` | Per-file cap |
 | `CHARON_MAX_FILES` | `20` | Files per entry |
@@ -270,7 +230,7 @@ security model.
 | `CHARON_MAX_TOTAL_BYTES` | `268435456` | Global ceiling across all live entries |
 | `CHARON_DEFAULT_TTL` | `24h` | Expiry when the caller does not ask for one |
 | `CHARON_MAX_TTL` | `7d` | Longest expiry a caller may ask for |
-| `CHARON_LINGER` | `60s` | Grace period after the first read |
+| `CHARON_LINGER` | `60s` | Maximum post-retrieve window a create may request. Per-entry default is `0`. |
 | `CHARON_CALLBACK_RULE` | — | rulekit expression; unset disables callbacks |
 | `CHARON_CALLBACK_SECRET` | — | HMAC key for signing callback deliveries |
 
@@ -281,7 +241,7 @@ and `w` in addition to Go's own units, so `7d` and `1w` both work.
 security model. Run charon on a trusted network, or behind a reverse proxy that
 authenticates.
 
-## Running
+### Running
 
 ```console
 docker run -p 1337:1337 --tmpfs /scratch:size=512m,uid=65532,gid=65532 ghcr.io/kamaln7/charon
@@ -302,6 +262,93 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 ```
+
+## charonctl
+
+The client an agent runs so it never has to touch the HTTP API or see a secret.
+It does not read the server environment table above.
+
+Install with `go install github.com/kamaln7/charon/cmd/charonctl@latest`.
+
+### Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHARON_API` | config `"api"`, else `http://localhost:1337` | Origin of the charon server |
+| `CHARON_SCRATCH_DIR` | user cache (`~/.cache/charonctl`) | Local receipts after `await` |
+
+Optional JSON config at `$XDG_CONFIG_HOME/charonctl/config.json` (default
+`~/.config/charonctl/config.json`, also on macOS):
+
+```json
+{"api":"https://charon.example"}
+```
+
+`CHARON_API` overrides `"api"`. A missing file is fine; unreadable or malformed
+config is an error, including unknown fields and trailing JSON. Relative
+`XDG_CONFIG_HOME` values are ignored. `get`, `cleanup`, `exec-env`, and help
+work without reading the config.
+
+### Commands
+
+Operands use named flags. `request` and `send` read their JSON spec from stdin.
+`--retrieve-handle` is the collect token; `--manage-handle` is the owner token.
+
+```console
+$ echo '{"secrets":[{"name":"API_TOKEN"},{"name":"DEPLOY_KEY","type":"file"}]}' \
+    | charonctl request
+TITLE quiet-otter
+LINK https://charon.example/e/fwlascooqxofa2ekujikwweq
+EXPIRES 2026-09-04T13:59:51Z
+RETRIEVE_HANDLE po3nkmdgisdb5veespq6hfph
+MANAGE_HANDLE kwwyvma5t53x4ulperhpuamo
+
+$ charon_exports=$(charonctl await --env --retrieve-handle po3nkmdgisdb5veespq6hfph) || exit "$?"
+collected "quiet-otter"
+set API_TOKEN (71 chars)
+file DEPLOY_KEY (id_ed25519, 411 bytes)
+receipt ~/.cache/charonctl/charonctl-po3nkmdgisdb5veespq6hfph
+$ eval "$charon_exports"
+$ unset charon_exports
+
+$ charonctl get --to ~/.ssh/deploy --mode 0600 --retrieve-handle po3nkmdgisdb5veespq6hfph --name DEPLOY_KEY
+$ charonctl cleanup --retrieve-handle po3nkmdgisdb5veespq6hfph
+```
+
+- `request` takes the same JSON as `POST /api/requests`, defaults the TTL to
+  `1d`, and insists every name is a shell identifier, because `--env` turns
+  them into variables. `--await` continues straight into `await`. `--timeout`
+  and `--cleanup-after` require `--await`.
+- `await` long-polls, collects once, and keeps the values in a private
+  receipt directory. Later calls answer from the receipt, so the server linger
+  window never matters. What was set goes to stderr, values never do; `--env`
+  writes `export` lines to stdout, files as `NAME_FILE=path`. The receipt is
+  removed after `--cleanup-after` (default 10m) by a detached copy of the
+  process.
+- `get` reads one value, to stdout or to a path. Exit code 3 means the user
+  left it blank.
+- `exec-env --retrieve-handle RETRIEVE_HANDLE [--name NAME ...] -- COMMAND [ARG ...]` runs a
+  command with collected secrets in its environment, without shell evaluation.
+  Repeat `--name` to allowlist receipt field names; omit it to select all.
+  Text becomes `NAME`, files become `NAME_FILE` pointing into the receipt.
+  Selected values override inherited variables; other inherited variables stay.
+  This selects receipt secrets, not an isolated environment. Unknown names,
+  skipped fields, NUL text, and colliding variable names fail before execution.
+  Receipt expiry is unchanged; copy files with `get --to` if needed longer.
+  On Unix the command replaces charonctl, preserving signals and exit status.
+- `send` reads JSON on stdin. Each secret needs exactly one source: `text`
+  (inline), `env` (variable name), `file` (one path uploaded as a file),
+  `files` (a list of paths on one secret), or `text_file` (path read as text,
+  bytes unchanged). Optional `type` must match the source; it is not a source
+  of its own. Optional `linger` (default `0`). Sources are resolved before
+  the entry is created. Prints `TITLE`, the retrieve `LINK`, and
+  `MANAGE_HANDLE`. A fill or submit failure destroys the draft.
+- `status --manage-handle MANAGE_HANDLE` reprints `LINK` and whether the
+  entry is fulfilled. `--retrieve-handle` reports the same without the share
+  link.
+- `destroy --manage-handle MANAGE_HANDLE` deletes the exchange on the server.
+  `cleanup --retrieve-handle RETRIEVE_HANDLE` deletes the local receipt.
+- Exit codes: 0 fine, 1 error, 2 timed out or expired, 3 blank.
 
 ## Development
 

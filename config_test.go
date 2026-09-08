@@ -28,6 +28,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	t.Setenv("CHARON_LINGER", "")
 	t.Setenv("CHARON_CALLBACK_RULE", "")
 	t.Setenv("CHARON_CALLBACK_SECRET", "")
+	t.Setenv("CHARON_SECRET_KEY", "")
 	c, err := LoadConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -37,5 +38,19 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if c.Callback.Enabled() {
 		t.Fatal("callbacks enabled with no rule")
+	}
+	if len(c.SecretKey) != 32 {
+		t.Fatalf("autogen CHARON_SECRET_KEY len = %d, want 32", len(c.SecretKey))
+	}
+}
+
+func TestLoadConfigSecretKey(t *testing.T) {
+	t.Setenv("CHARON_SECRET_KEY", "operator-secret")
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(c.SecretKey) != "operator-secret" {
+		t.Fatalf("SecretKey = %q", c.SecretKey)
 	}
 }

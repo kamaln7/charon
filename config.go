@@ -1,22 +1,22 @@
 package main
 
 import (
+	"crypto/rand"
 	"fmt"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	rulekit "github.com/qpoint-io/rulekit/v2"
 )
 
 type Config struct {
-	Addr     string
-	BaseURL  string
-	Scratch  string
-	Limits   Limits
-	Callback Callback
+	Addr      string
+	BaseURL   string
+	Scratch   string
+	SecretKey []byte
+	Limits    Limits
+	Callback  Callback
 }
 
 func LoadConfig() (Config, error) {
@@ -26,12 +26,7 @@ func LoadConfig() (Config, error) {
 		Scratch: env("CHARON_SCRATCH_DIR", ""),
 		Callback: Callback{
 			Secret: env("CHARON_CALLBACK_SECRET", ""),
-			Client: &http.Client{
-				Timeout: 15 * time.Second,
-				CheckRedirect: func(*http.Request, []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			},
+			Client: callbackClient(),
 		},
 	}
 
@@ -60,8 +55,17 @@ func LoadConfig() (Config, error) {
 	if c.Limits.MaxTTL, err = parseDuration(env("CHARON_MAX_TTL", "7d")); err != nil {
 		return c, fmt.Errorf("CHARON_MAX_TTL: %w", err)
 	}
-	if c.Limits.Linger, err = parseDuration(env("CHARON_LINGER", "60s")); err != nil {
+	if c.Limits.Linger, err = parseNonNegativeDuration(env("CHARON_LINGER", "60s")); err != nil {
 		return c, fmt.Errorf("CHARON_LINGER: %w", err)
+	}
+
+	if v := os.Getenv("CHARON_SECRET_KEY"); v != "" {
+		c.SecretKey = []byte(v)
+	} else {
+		c.SecretKey = make([]byte, 32)
+		if _, err := rand.Read(c.SecretKey); err != nil {
+			return c, fmt.Errorf("CHARON_SECRET_KEY: %w", err)
+		}
 	}
 
 	// Callbacks stay off until an operator writes a rule. Parsing here rather

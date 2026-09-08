@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -133,14 +137,42 @@ func TestCallbackRefusesRedirects(t *testing.T) {
 		http.Redirect(w, r, evil.URL, http.StatusFound)
 	}))
 	defer hop.Close()
-	c := Callback{Client: &http.Client{
-		Timeout: 2 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}}
-	if err := c.post(hop.URL, []byte(`{}`)); err == nil {
+	if err := (Callback{}).post(hop.URL, []byte(`{}`)); err == nil {
 		t.Fatal("followed a redirect")
+	}
+}
+
+func TestCallbackSend(t *testing.T) {
+	s := NewStore(testLimits())
+	e := newTestEntry(s, time.Hour)
+	s.SetText(e, 0, "payload")
+	s.Submit(e)
+
+	var body []byte
+	var hdr http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hdr = r.Header.Clone()
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	e.CallbackURL = srv.URL
+	Callback{Secret: "k"}.Send(s, "http://x", e)
+	if e.ConsumedAt.IsZero() {
+		t.Fatal("success did not start linger")
+	}
+	if !strings.Contains(string(body), "payload") {
+		t.Fatalf("body %s", body)
+	}
+	if strings.Contains(string(body), `"destructs_at":"0001-`) {
+		t.Fatalf("destructs_at unset: %s", body)
+	}
+	mac := hmac.New(sha256.New, []byte("k"))
+	mac.Write([]byte(hdr.Get("X-Charon-Timestamp") + "."))
+	mac.Write(body)
+	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if hdr.Get("X-Charon-Signature") != want {
+		t.Fatalf("signature %q, want %q", hdr.Get("X-Charon-Signature"), want)
 	}
 }
 

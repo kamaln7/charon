@@ -50,6 +50,7 @@ func (s *server) Handler() http.Handler {
 	apiMux.Handle("DELETE /api/e/{id}/files/{idx}/{n}", s.handle(s.dropFile))
 	apiMux.Handle("POST /api/e/{id}/submit", s.handle(s.submitEntry))
 	apiMux.Handle("POST /api/e/{id}/retrieve", s.handle(s.retrieveEntry))
+	apiMux.Handle("DELETE /api/e/{id}", s.handle(s.destroyEntry))
 	apiMux.Handle("GET /api/f/{token}", s.handle(s.downloadFile))
 
 	mux := http.NewServeMux()

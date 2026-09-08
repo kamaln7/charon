@@ -19,20 +19,25 @@ func (c Config) createResponse(e *Entry) api.CreateResponse {
 		RetrieveURL: c.BaseURL + "/e/" + e.RetrieveID,
 		PollURL:     c.BaseURL + "/api/e/" + e.RetrieveID,
 		ManageURL:   c.BaseURL + "/manage?token=" + e.ManageID,
+		DestroyURL:  c.BaseURL + "/api/e/" + e.ManageID,
+		SubmitID:    e.SubmitID,
+		RetrieveID:  e.RetrieveID,
+		ManageID:    e.ManageID,
 		ExpiresAt:   rfc3339(e.ExpiresAt),
 	}
 }
 
 func (c Config) entryResponse(e *Entry, rl role) api.EntryResponse {
 	out := api.EntryResponse{
-		Kind:      e.Kind,
-		Role:      rl.String(),
-		Title:     e.Title,
-		HTML:      renderMarkdown(e.Description),
-		Secrets:   make([]api.SecretResponse, 0, len(e.Secrets)),
-		Fulfilled: e.Fulfilled,
-		Retrieved: !e.ConsumedAt.IsZero(),
-		ExpiresAt: rfc3339(e.ExpiresAt),
+		Kind:          e.Kind,
+		Role:          rl.String(),
+		Title:         e.Title,
+		HTML:          renderMarkdown(e.Description),
+		Secrets:       make([]api.SecretResponse, 0, len(e.Secrets)),
+		Fulfilled:     e.Fulfilled,
+		Retrieved:     !e.ConsumedAt.IsZero(),
+		ExpiresAt:     rfc3339(e.ExpiresAt),
+		LingerSeconds: int(e.Linger.Seconds()),
 	}
 	if rl == roleManage {
 		out.SubmitURL = c.BaseURL + "/e/" + e.SubmitID

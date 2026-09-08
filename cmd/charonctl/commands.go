@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kamaln7/charon/internal/api"
@@ -40,12 +42,65 @@ func cmdRequest(c *client, stdin io.Reader, stdout, stderr io.Writer, await bool
 	if err != nil {
 		return err
 	}
-	handle := tokenOf(created.RetrieveURL)
-	fmt.Fprintf(stdout, "LINK %s\nEXPIRES %s\nHANDLE %s\n", created.SubmitURL, created.ExpiresAt, handle)
+	printCreated(stdout, created.Title, created.SubmitURL, created.ExpiresAt, created.RetrieveID, created.ManageID)
 	if !await {
 		return nil
 	}
-	return cmdAwait(c, stdout, stderr, handle, timeout, false, cleanup)
+	return cmdAwait(c, stdout, stderr, created.RetrieveID, timeout, false, cleanup)
+}
+
+func printCreated(w io.Writer, title, link, expires, retrieve, manage string) {
+	fmt.Fprintf(w, "TITLE %s\nLINK %s\nEXPIRES %s\n", title, link, expires)
+	if retrieve != "" {
+		fmt.Fprintf(w, "RETRIEVE_HANDLE %s\n", retrieve)
+	}
+	fmt.Fprintf(w, "MANAGE_HANDLE %s\n", manage)
+}
+
+func cmdDestroy(c *client, handle string) error {
+	if _, err := viewAs(c, handle, "manage"); err != nil {
+		return err
+	}
+	return c.destroy(handle)
+}
+
+func cmdStatus(c *client, stdout io.Writer, handle, wantRole string) error {
+	view, err := viewAs(c, handle, wantRole)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "TITLE %s\nKIND %s\n", view.Title, view.Kind)
+	if view.Role == "manage" {
+		link := view.RetrieveURL
+		if view.Kind == api.KindRequest && view.SubmitURL != "" {
+			link = view.SubmitURL
+		}
+		fmt.Fprintf(stdout, "LINK %s\n", link)
+	}
+	fmt.Fprintf(stdout, "EXPIRES %s\nFULFILLED %t\nRETRIEVED %t\n",
+		view.ExpiresAt, view.Fulfilled, view.Retrieved)
+	if view.Role == "manage" && view.RetrieveURL != "" {
+		fmt.Fprintf(stdout, "RETRIEVE_HANDLE %s\n", tokenOf(view.RetrieveURL))
+	}
+	return nil
+}
+
+func viewAs(c *client, handle, want string) (api.EntryResponse, error) {
+	if !handleShape.MatchString(handle) {
+		return api.EntryResponse{}, fmt.Errorf("handle %q is not a charon id", handle)
+	}
+	view, err := c.view(handle, 0)
+	var ae *apiError
+	if errors.As(err, &ae) && ae.status == 404 {
+		return view, fail(exitTimeout, "entry %s not found (expired, destroyed, or already collected)", handle)
+	}
+	if err != nil {
+		return view, err
+	}
+	if view.Role != want {
+		return view, fail(exitError, "this is a %s handle; need a %s handle", view.Role, want)
+	}
+	return view, nil
 }
 
 // cmdAwait blocks until the entry is fulfilled, collects it once, and answers
@@ -78,13 +133,17 @@ func cmdAwait(c *client, stdout, stderr io.Writer, handle string, timeout time.D
 
 func collect(c *client, handle string, timeout time.Duration) (*receipt, error) {
 	deadline := time.Now().Add(timeout)
-	for {
+	view, err := viewAs(c, handle, "retrieve")
+	if err != nil {
+		return nil, err
+	}
+	for !view.Fulfilled {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return nil, fail(exitTimeout, "timed out after %s waiting for %s", timeout, handle)
 		}
 		start := time.Now()
-		view, err := c.view(handle, min(pollWait, remaining))
+		view, err = c.view(handle, min(pollWait, remaining))
 		var ae *apiError
 		if errors.As(err, &ae) && ae.status == 404 {
 			return nil, fail(exitTimeout, "request %s has expired or was already collected", handle)
@@ -144,7 +203,15 @@ func cmdGet(stdout io.Writer, handle, name, to, mode string) error {
 	return err
 }
 
-func cmdCleanup(handle string, after time.Duration) error {
+func cmdCleanup(handle, from string, after time.Duration) error {
+	if from != "" {
+		b, err := os.ReadFile(from)
+		if err != nil {
+			return err
+		}
+		handle = strings.TrimSpace(string(b))
+		defer os.Remove(from)
+	}
 	dir, err := receiptDir(handle)
 	if err != nil {
 		return err
@@ -154,17 +221,55 @@ func cmdCleanup(handle string, after time.Duration) error {
 }
 
 // scheduleCleanup re-executes this binary detached, so the receipt disappears
-// even if the shell that ran await is long gone.
+// even if the shell that ran await is long gone. The handle is written to a
+// 0600 file and passed as --from so it appears in neither argv nor the
+// environment (`ps` and `ps e` both miss it).
 func scheduleCleanup(handle string, after time.Duration) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, "cleanup", "--after", after.String(), "--handle", handle)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
-	detach(cmd)
+	from, err := writeCleanupHandle(handle)
+	if err != nil {
+		return err
+	}
+	cmd := cleanupCmd(exe, after, from)
 	if err := cmd.Start(); err != nil {
+		os.Remove(from)
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+func writeCleanupHandle(handle string) (string, error) {
+	dir, err := receiptDir(handle)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(filepath.Dir(dir), ".charonctl-")
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.WriteString(handle); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", err
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		os.Remove(name)
+		return "", err
+	}
+	if err := os.Chmod(name, 0o600); err != nil {
+		os.Remove(name)
+		return "", err
+	}
+	return name, nil
+}
+
+func cleanupCmd(exe string, after time.Duration, from string) *exec.Cmd {
+	cmd := exec.Command(exe, "cleanup", "--after", after.String(), "--from", from)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
+	detach(cmd)
+	return cmd
 }

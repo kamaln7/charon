@@ -1,7 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/sha512"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"mime/multipart"
@@ -22,10 +30,23 @@ import (
 // all: read the directory, parse the prefix, delete what is past due. That is
 // what makes a startup sweep possible.
 type Scratch struct {
-	dir string
+	dir            string
+	aesKey, macKey []byte
 }
 
-func NewScratch(dir string) *Scratch { return &Scratch{dir: dir} }
+const (
+	fileNonceSize = aes.BlockSize
+	fileMACSize   = sha256.Size
+)
+
+func NewScratch(dir string, secret []byte) *Scratch {
+	if len(secret) == 0 {
+		secret = make([]byte, 32)
+		rand.Read(secret)
+	}
+	sum := sha512.Sum512(secret)
+	return &Scratch{dir: dir, aesKey: sum[:32], macKey: sum[32:]}
+}
 
 func (s *Scratch) Dir() string { return s.dir }
 
@@ -106,11 +127,22 @@ func (s *Scratch) Spool(part *multipart.Part, expires time.Time, limit int64, re
 	if err != nil {
 		return File{}, err
 	}
-	n, err := io.Copy(f, io.LimitReader(part, limit+1))
+	enc, err := s.encryptWriter(f)
+	if err != nil {
+		f.Close()
+		s.Remove(f.Name())
+		return File{}, err
+	}
+	n, err := io.Copy(enc, io.LimitReader(part, limit+1))
+	closeErr := enc.Close()
 	f.Close()
 	if err != nil {
 		s.Remove(f.Name())
 		return File{}, err
+	}
+	if closeErr != nil {
+		s.Remove(f.Name())
+		return File{}, closeErr
 	}
 	if n > limit {
 		s.Remove(f.Name())
@@ -121,6 +153,76 @@ func (s *Scratch) Spool(part *multipart.Part, expires time.Time, limit int64, re
 		return File{}, err
 	}
 	return File{Name: safeFilename(part.FileName()), Size: n, path: f.Name()}, nil
+}
+
+// Open decrypts a scratch file. The plaintext is at most the per-file cap.
+func (s *Scratch) Open(path string) (io.ReadCloser, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	plain, err := s.decrypt(raw)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(plain)), nil
+}
+
+type encWriter struct {
+	w      io.Writer
+	stream cipher.Stream
+	mac    hash.Hash
+}
+
+func (s *Scratch) encryptWriter(w io.Writer) (*encWriter, error) {
+	nonce := make([]byte, fileNonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(s.aesKey)
+	if err != nil {
+		return nil, err
+	}
+	mac := hmac.New(sha256.New, s.macKey)
+	mac.Write(nonce)
+	if _, err := w.Write(nonce); err != nil {
+		return nil, err
+	}
+	return &encWriter{w: w, stream: cipher.NewCTR(block, nonce), mac: mac}, nil
+}
+
+func (e *encWriter) Write(p []byte) (int, error) {
+	buf := make([]byte, len(p))
+	e.stream.XORKeyStream(buf, p)
+	e.mac.Write(buf)
+	return e.w.Write(buf)
+}
+
+func (e *encWriter) Close() error {
+	_, err := e.w.Write(e.mac.Sum(nil))
+	return err
+}
+
+func (s *Scratch) decrypt(raw []byte) ([]byte, error) {
+	if len(raw) < fileNonceSize+fileMACSize {
+		return nil, fmt.Errorf("truncated scratch file")
+	}
+	nonce := raw[:fileNonceSize]
+	macOff := len(raw) - fileMACSize
+	ct, got := raw[fileNonceSize:macOff], raw[macOff:]
+	mac := hmac.New(sha256.New, s.macKey)
+	mac.Write(nonce)
+	mac.Write(ct)
+	if !hmac.Equal(mac.Sum(nil), got) {
+		return nil, fmt.Errorf("scratch file: bad mac")
+	}
+	block, err := aes.NewCipher(s.aesKey)
+	if err != nil {
+		return nil, err
+	}
+	plain := make([]byte, len(ct))
+	cipher.NewCTR(block, nonce).XORKeyStream(plain, ct)
+	return plain, nil
 }
 
 // safeFilename keeps the client's name as metadata only; the path on disk is

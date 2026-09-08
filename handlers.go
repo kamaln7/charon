@@ -149,7 +149,7 @@ func (s *server) addFile(w http.ResponseWriter, r *http.Request) error {
 
 	// The file's encoded deadline is the latest moment it could still be
 	// wanted: the entry's own expiry plus the post-retrieval linger.
-	deadline := e.ExpiresAt.Add(s.cfg.Limits.Linger)
+	deadline := e.ExpiresAt.Add(e.Linger)
 	f, err := s.scratch.Spool(part, deadline, s.cfg.Limits.MaxFileBytes, s.store.Reserve)
 	if err != nil {
 		return err
@@ -210,8 +210,20 @@ func (s *server) retrieveEntry(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	destructs := e.ConsumedAt.Add(s.cfg.Limits.Linger)
+	destructs := e.ConsumedAt.Add(e.Linger)
 	writeJSON(w, http.StatusOK, revealResponse(s.cfg.BaseURL, e.Title, destructs, secrets))
+	return nil
+}
+
+func (s *server) destroyEntry(w http.ResponseWriter, r *http.Request) error {
+	e, err := s.entryAs(r, roleManage)
+	if err != nil {
+		return err
+	}
+	for _, path := range s.store.destroy(e) {
+		s.scratch.Remove(path)
+	}
+	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 
@@ -220,7 +232,7 @@ func (s *server) downloadFile(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return errNotFound
 	}
-	fh, err := f.Open()
+	fh, err := s.scratch.Open(f.path)
 	if err != nil {
 		return errorf(http.StatusGone, "file is gone")
 	}
@@ -297,6 +309,10 @@ func (s *server) newEntry(kind api.Kind, req api.CreateRequest) (*Entry, error) 
 	if err != nil {
 		return nil, errorf(http.StatusBadRequest, "%v", err)
 	}
+	linger, err := parseLinger(req.Linger, limits)
+	if err != nil {
+		return nil, errorf(http.StatusBadRequest, "%v", err)
+	}
 
 	if err := checkLen("title", req.Title, maxTitleBytes); err != nil {
 		return nil, err
@@ -316,6 +332,7 @@ func (s *server) newEntry(kind api.Kind, req api.CreateRequest) (*Entry, error) 
 		RetrieveID:  NewID(),
 		ManageID:    NewID(),
 		ExpiresAt:   time.Now().Add(ttl),
+		Linger:      linger,
 	}
 	for i, spec := range req.Secrets {
 		if err := checkLen(fmt.Sprintf("secrets[%d].name", i), spec.Name, maxNameBytes); err != nil {

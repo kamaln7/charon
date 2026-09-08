@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +14,7 @@ import (
 // whether a file still matters.
 func TestScratchSweepUsesEncodedExpiry(t *testing.T) {
 	dir := t.TempDir()
-	s := NewScratch(dir)
+	s := NewScratch(dir, nil)
 	now := time.Now()
 
 	stale, err := s.Create(now.Add(-time.Hour))
@@ -50,14 +52,14 @@ func TestScratchSweepUsesEncodedExpiry(t *testing.T) {
 // nothing but the directory to go on.
 func TestScratchSweepSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
-	old := NewScratch(dir)
+	old := NewScratch(dir, nil)
 	f, err := old.Create(time.Now().Add(-time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
 
-	if n := NewScratch(dir).Sweep(time.Now()); n != 1 {
+	if n := NewScratch(dir, nil).Sweep(time.Now()); n != 1 {
 		t.Fatalf("a restarted process swept %d orphans, want 1", n)
 	}
 }
@@ -72,6 +74,55 @@ func TestExpiryFromName(t *testing.T) {
 	got, ok := expiryFromName("1700000000-abcdef")
 	if !ok || got.Unix() != 1700000000 {
 		t.Errorf("expiryFromName = %v, %v; want 1700000000", got.Unix(), ok)
+	}
+}
+
+func TestScratchEncryptRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s := NewScratch(dir, []byte("secret"))
+	f, err := s.Create(time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.encryptWriter(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(w, "hello secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	name := f.Name()
+	f.Close()
+
+	raw, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("hello secret")) {
+		t.Fatal("plaintext landed on disk")
+	}
+
+	r, err := s.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(r)
+	r.Close()
+	if err != nil || string(got) != "hello secret" {
+		t.Fatalf("round trip = %q, %v", got, err)
+	}
+
+	other := NewScratch(dir, []byte("other"))
+	if _, err := other.Open(name); err == nil {
+		t.Fatal("wrong key opened the file")
+	}
+	raw[len(raw)/2] ^= 0xff
+	os.WriteFile(name, raw, 0o600)
+	if _, err := s.Open(name); err == nil {
+		t.Fatal("tampered file opened")
 	}
 }
 

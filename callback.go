@@ -31,6 +31,15 @@ type Callback struct {
 
 func (c Callback) Enabled() bool { return c.Rule != nil }
 
+func callbackClient() *http.Client {
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
 // Check evaluates the operator's rule against the URL's components. It fails
 // closed: only an unambiguous pass allows delivery.
 func (c Callback) Check(raw string) error {
@@ -107,7 +116,7 @@ func (c Callback) Send(store *Store, baseURL string, e *Entry) {
 		return
 	}
 	body, err := json.Marshal(revealResponse(
-		baseURL, e.Title, e.ConsumedAt.Add(store.limits.Linger), secrets))
+		baseURL, e.Title, time.Now().Add(e.Linger), secrets))
 	if err != nil {
 		return
 	}
@@ -147,7 +156,11 @@ func (c Callback) post(target string, body []byte) error {
 		req.Header.Set("X-Charon-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 	}
 
-	res, err := c.Client.Do(req)
+	client := c.Client
+	if client == nil {
+		client = callbackClient()
+	}
+	res, err := client.Do(req)
 	if err != nil {
 		return err
 	}

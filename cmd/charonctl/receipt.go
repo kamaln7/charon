@@ -48,7 +48,7 @@ func receiptDir(handle string) (string, error) {
 	if !handleShape.MatchString(handle) {
 		return "", fmt.Errorf("handle %q is not a charon id", handle)
 	}
-	base := os.Getenv("CHARON_SCRATCH")
+	base := os.Getenv("CHARON_SCRATCH_DIR")
 	if base == "" {
 		cache, err := os.UserCacheDir()
 		if err != nil {

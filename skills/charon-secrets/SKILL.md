@@ -22,6 +22,7 @@ use shell tracing (`set -x`) when consuming secrets.
 
 Create the request as soon as the task needs it; never ask for secrets in chat.
 Names must be shell identifiers. Use the default exchange TTL of `1d`.
+Leave `linger` unset (default `0`); charonctl collects once into a receipt.
 
 ```bash
 echo '{
@@ -37,18 +38,20 @@ Start the command using the applicable harness row in step 3.
 
 ## 3. Share the link and await collection
 
-Output starts with `LINK`, `EXPIRES`, and `HANDLE`. Give the user `LINK` as
-plain text immediately, retain `HANDLE` for retrieval, and continue independent
-work. Let `charonctl` handle long-polling.
+Output starts with `TITLE`, `LINK`, `EXPIRES`, `RETRIEVE_HANDLE`, and
+`MANAGE_HANDLE`. Give the user `LINK` as plain text immediately, mention
+`TITLE` so they can confirm the page, retain `RETRIEVE_HANDLE` for
+retrieval, and continue independent work. Let `charonctl` handle long-polling.
+If the user cancels, `charonctl destroy --manage-handle MANAGE_HANDLE`.
 
 | Harness | Execution and completion |
 | --- | --- |
 | Claude Code | Bash with `run_in_background: true` and `timeout: 600000` (10 minutes). Read initial output for the link, then use the task completion notification. |
 | Codex (`exec_command`) | Set `yield_time_ms: 1000`; retain `session_id`. Read output/completion with `write_stdin`, `chars: ""`, and `yield_time_ms: 1000` when resuming work that needs the secret. Do not assume completion notifications. |
-| No persistent sessions | Run `request` without `--await`, share the link, then run `charonctl await --timeout 30s --handle HANDLE` when resuming. If stderr says timed out waiting, reuse the handle on the next attempt; do not create a duplicate request. |
+| No persistent sessions | Run `request` without `--await`, share the link, then run `charonctl await --timeout 30s --retrieve-handle RETRIEVE_HANDLE` when resuming. If stderr says timed out waiting, reuse the handle on the next attempt; do not create a duplicate request. |
 
 If the 10-minute Claude tool timeout ends the waiter before submission, or
-any harness kills it, resume with `charonctl await --handle HANDLE` using the
+any harness kills it, resume with `charonctl await --retrieve-handle RETRIEVE_HANDLE` using the
 same harness settings. Reuse the existing handle; do not create another request.
 Successful collection reports `set NAME`, `file NAME`, or `blank NAME` without
 values. If a required field is blank, request it again; exclude optional blank
@@ -68,7 +71,7 @@ containing the receipt path.
 ### 4a. Run a command
 
 ```bash
-charonctl exec-env --handle HANDLE --name API_TOKEN --name DEPLOY_KEY -- your-command --its-flags
+charonctl exec-env --retrieve-handle RETRIEVE_HANDLE --name API_TOKEN --name DEPLOY_KEY -- your-command --its-flags
 ```
 
 Repeat `--name` to allowlist receipt field names; omit it to select all.
@@ -84,7 +87,7 @@ Blank fields are omitted: unset requested variables first to avoid stale values.
 
 ```bash
 unset API_TOKEN DEPLOY_KEY_FILE
-charon_exports="$(charonctl await --env --handle HANDLE)" || exit "$?"
+charon_exports="$(charonctl await --env --retrieve-handle RETRIEVE_HANDLE)" || exit "$?"
 eval "${charon_exports}"
 unset charon_exports
 # Run the consuming command here, in this same shell invocation.
@@ -93,7 +96,7 @@ unset charon_exports
 ### 4c. Save a file
 
 ```bash
-charonctl get --handle HANDLE --name DEPLOY_KEY --to ~/.ssh/deploy_key --mode 0600
+charonctl get --retrieve-handle RETRIEVE_HANDLE --name DEPLOY_KEY --to ~/.ssh/deploy_key --mode 0600
 ```
 
 Without `--to`, `get` writes the value to stdout: pipe it directly into a
@@ -101,25 +104,38 @@ consumer; never display it in a tool result.
 
 ## 5. Hand over a secret
 
-Each secret takes `text` (a value) or `file` (a path). Prefer file paths for
-existing secret files. For text, construct JSON from the value inside the shell
-and pipe it directly to stdin; do not embed real values in agent tool arguments.
+Each secret takes exactly one source: `env` (variable name), `file` (one path
+uploaded as a file), `files` (a list of paths on one secret), `text_file`
+(path whose contents become text, verbatim), or `text` (inline). Optional
+`type` must match the source; do not send `"type"` instead of a source.
+Prefer `env` or a path so the value is not in the JSON. Do not embed
+real values in agent tool arguments.
 
 ```bash
 echo '{
   "title": "Generated deploy key",
-  "secrets": [{"name": "private key", "file": "/path/to/gen.pem"}]
+  "ttl": "1d",
+  "secrets": [
+    {"name": "API_TOKEN", "env": "API_TOKEN"},
+    {"name": "NOTE", "text_file": "/tmp/note.txt"},
+    {"name": "private key", "file": "/path/to/gen.pem"},
+    {"name": "certs", "files": ["/path/to/a.pem", "/path/to/b.pem"]}
+  ]
 }' | charonctl send
 ```
 
-One call creates, fills, and finalises the exchange. Give the user `LINK`.
+One call creates, fills, and finalises the exchange. Give the user `LINK`
+and mention `TITLE`. Keep `MANAGE_HANDLE` to abort with
+`charonctl destroy --manage-handle`. A fill failure destroys the draft itself.
 
 ## 6. Handle expiry or failure
 
 Collection stores a private local receipt and schedules deletion after
 10 minutes. Rereading does not extend this lifetime. `NAME_FILE` paths expire
 with the receipt; use `get --to` when a file needs to last longer. If cleanup
-scheduling warns, run `charonctl cleanup --handle HANDLE` after consuming it.
+scheduling warns, run `charonctl cleanup --retrieve-handle RETRIEVE_HANDLE` after consuming it.
+If the user cancels a pending exchange, `charonctl destroy --manage-handle MANAGE_HANDLE`.
+`destroy` is the server entry; `cleanup` is the local receipt.
 
 A Charon restart loses pending exchanges; collected local receipts still work
 until deleted. Create a new request when the exchange has expired or

@@ -30,6 +30,7 @@ func newTestEntry(s *Store, ttl time.Duration) *Entry {
 		SubmitID:   NewID(),
 		RetrieveID: NewID(),
 		ExpiresAt:  time.Now().Add(ttl),
+		Linger:     s.limits.Linger,
 	}
 	s.Put(e)
 	return e
@@ -103,6 +104,44 @@ func TestLingerThenSelfDestruct(t *testing.T) {
 	s.Sweep(e.ConsumedAt.Add(31 * time.Second))
 	if _, _, err := s.Lookup(e.RetrieveID); err != ErrNotFound {
 		t.Fatalf("want ErrNotFound after self-destruct, got %v", err)
+	}
+}
+
+func TestLingerZeroBurnsOnNextLookup(t *testing.T) {
+	s := NewStore(testLimits())
+	e := newTestEntry(s, time.Hour)
+	e.Linger = 0
+	s.SetText(e, 0, "x")
+	s.Submit(e)
+	if _, err := s.Retrieve(e); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Lookup(e.RetrieveID); err != ErrNotFound {
+		t.Fatalf("lookup after linger-0 retrieve: %v", err)
+	}
+	s.Sweep(e.ConsumedAt.Add(time.Second))
+	if s.total != 0 {
+		t.Fatalf("linger-0 sweep left %d billed bytes", s.total)
+	}
+}
+
+func TestSweepUnsubmittedDraftReturnsFilePaths(t *testing.T) {
+	s := NewStore(testLimits())
+	e := newTestEntry(s, time.Minute)
+	e.Linger = 0
+	path := "/tmp/charon-draft-file"
+	if err := s.AddFile(e, 0, File{Name: "k", Size: 1, path: path}); err != nil {
+		t.Fatal(err)
+	}
+	if paths := s.Sweep(time.Now()); paths != nil {
+		t.Fatalf("swept live draft: %v", paths)
+	}
+	paths := s.Sweep(e.ExpiresAt.Add(time.Second))
+	if len(paths) != 1 || paths[0] != path {
+		t.Fatalf("sweep paths = %v, want [%s]", paths, path)
+	}
+	if _, _, err := s.Lookup(e.SubmitID); err != ErrNotFound {
+		t.Fatalf("unsubmitted draft survived TTL: %v", err)
 	}
 }
 
@@ -191,6 +230,28 @@ func TestParseTTL(t *testing.T) {
 	}
 	if opts := tight.TTLOptions(); len(opts) != 2 || opts[1] != "1h" {
 		t.Errorf("TTLOptions under a 1h ceiling = %v, want [15m 1h]", opts)
+	}
+}
+
+func TestParseLinger(t *testing.T) {
+	l := Limits{Linger: 60 * time.Second}
+	for in, want := range map[string]time.Duration{
+		"":    0,
+		"0":   0,
+		"0s":  0,
+		"15s": 15 * time.Second,
+		"60s": 60 * time.Second,
+		"1m":  time.Minute,
+	} {
+		got, err := parseLinger(in, l)
+		if err != nil || got != want {
+			t.Errorf("parseLinger(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"2m", "1h", "banana", "-1s"} {
+		if _, err := parseLinger(in, l); err == nil {
+			t.Errorf("parseLinger(%q) accepted an invalid or over-cap value", in)
+		}
 	}
 }
 

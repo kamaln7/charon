@@ -131,6 +131,10 @@ func (c *client) submit(id string) error {
 	return c.do("POST", "/api/e/"+url.PathEscape(id)+"/submit", nil, "", nil)
 }
 
+func (c *client) destroy(id string) error {
+	return c.do("DELETE", "/api/e/"+url.PathEscape(id), nil, "", nil)
+}
+
 func (c *client) download(fileURL string) ([]byte, error) {
 	if !strings.HasPrefix(fileURL, c.base+"/") {
 		return nil, fmt.Errorf("file URL is not on this charon")
@@ -146,7 +150,7 @@ func (c *client) download(fileURL string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 }
 
-// tokenOf extracts the entry id from one of the URLs charon hands back.
+// tokenOf extracts the entry id from a /e/{id} URL.
 func tokenOf(u string) string {
 	return u[strings.LastIndex(strings.TrimSuffix(u, "/"), "/")+1:]
 }

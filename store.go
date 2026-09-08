@@ -5,7 +5,6 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -38,8 +37,6 @@ type File struct {
 	token string // minted at first retrieval; the one-shot download key
 }
 
-func (f File) Open() (*os.File, error) { return os.Open(f.path) }
-
 type Entry struct {
 	Kind        api.Kind
 	Title       string
@@ -53,9 +50,12 @@ type Entry struct {
 
 	Fulfilled bool
 	ExpiresAt time.Time
+	// Linger is how long the payload stays readable after the first retrieve.
+	// Zero means the next lookup misses; Sweep then deletes the entry and files.
+	Linger time.Duration
 
 	// ConsumedAt is when the payload was first handed out. The entry lingers
-	// for Limits.Linger afterwards so a client that drops the connection, or an
+	// for Linger afterwards so a client that drops the connection, or an
 	// agent that retries, can ask again. Then it self-destructs.
 	ConsumedAt time.Time
 	minted     []Secret
@@ -75,11 +75,11 @@ func (e *Entry) finish() {
 	}
 }
 
-func (e *Entry) deadline(linger time.Duration) time.Time {
+func (e *Entry) deadline() time.Time {
 	if e.ConsumedAt.IsZero() {
 		return e.ExpiresAt
 	}
-	if d := e.ConsumedAt.Add(linger); d.Before(e.ExpiresAt) {
+	if d := e.ConsumedAt.Add(e.Linger); d.Before(e.ExpiresAt) {
 		return d
 	}
 	return e.ExpiresAt
@@ -91,8 +91,8 @@ const (
 	roleSubmit role = iota
 	roleRetrieve
 	// roleManage is the creator's own token. It reads back the other two links
-	// and nothing else — it cannot submit a draft or consume the payload, so
-	// the manage page never has to be trusted with the secret itself.
+	// and can destroy the entry. It cannot submit a draft or consume the
+	// payload, so the manage page never has to be trusted with the secret.
 	roleManage
 )
 
@@ -120,8 +120,8 @@ type Limits struct {
 	MaxTotalBytes int64
 	DefaultTTL    time.Duration
 	MaxTTL        time.Duration
-	// Linger is how long a retrieved entry stays readable before it destroys
-	// itself. Burn-strictly-on-first-byte breaks any client that retries.
+	// Linger is the maximum post-retrieve window a create may request.
+	// The per-entry default is zero.
 	Linger time.Duration
 }
 
@@ -171,7 +171,7 @@ func (s *Store) Lookup(id string) (*Entry, role, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.byID[id]
-	if !ok || time.Now().After(r.entry.deadline(s.limits.Linger)) {
+	if !ok || time.Now().After(r.entry.deadline()) {
 		return nil, 0, ErrNotFound
 	}
 	return r.entry, r.role, nil
@@ -407,7 +407,7 @@ func (s *Store) Sweep(now time.Time) []string {
 	seen := make(map[*Entry]bool)
 	var dead []*Entry
 	for _, r := range s.byID {
-		if !seen[r.entry] && now.After(r.entry.deadline(s.limits.Linger)) {
+		if !seen[r.entry] && now.After(r.entry.deadline()) {
 			seen[r.entry] = true
 			dead = append(dead, r.entry)
 		}

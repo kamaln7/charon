@@ -42,16 +42,16 @@ func TestExecEnvCommand(t *testing.T) {
 	}
 	t.Setenv("CHARON_TEST_TOKEN", "stale")
 	t.Setenv("CHARON_TEST_INHERITED", "preserved")
-	cmd := exec.Command(bin, "exec-env", "--handle", handle, "--name", "CHARON_TEST_TOKEN", "--name", "CHARON_TEST_KEY", "--", "/bin/sh", "-c", `test "$CHARON_TEST_INHERITED" = preserved && test -z "${CHARON_TEST_EXCLUDED+x}" && cat "$CHARON_TEST_KEY_FILE" && printf '%s' "$CHARON_TEST_TOKEN"`)
+	cmd := exec.Command(bin, "exec-env", "--retrieve-handle", handle, "--name", "CHARON_TEST_TOKEN", "--name", "CHARON_TEST_KEY", "--", "/bin/sh", "-c", `test "$CHARON_TEST_INHERITED" = preserved && test -z "${CHARON_TEST_EXCLUDED+x}" && cat "$CHARON_TEST_KEY_FILE" && printf '%s' "$CHARON_TEST_TOKEN"`)
 	if out, err := cmd.CombinedOutput(); err != nil || string(out) != "key bytes'\" $HOME $(exit 99)\n\n" {
 		t.Fatalf("round trip: %q, %v", out, err)
 	}
-	cmd = exec.Command(bin, "exec-env", "--handle", handle, "--name", "CHARON_TEST_TOKEN", "--", "/bin/sh", "-c", "exit 17")
+	cmd = exec.Command(bin, "exec-env", "--retrieve-handle", handle, "--name", "CHARON_TEST_TOKEN", "--", "/bin/sh", "-c", "exit 17")
 	if err := cmd.Run(); err == nil || cmd.ProcessState.ExitCode() != 17 {
 		t.Fatalf("child exit: %v", err)
 	}
 	for _, names := range [][]string{nil, {"missing"}, {"CHARON_TEST_BLANK"}} {
-		args := []string{"exec-env", "--handle", handle}
+		args := []string{"exec-env", "--retrieve-handle", handle}
 		for _, name := range names {
 			args = append(args, "--name", name)
 		}

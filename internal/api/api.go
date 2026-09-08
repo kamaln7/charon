@@ -40,7 +40,10 @@ type CreateRequest struct {
 	Description string       `json:"description,omitempty"`
 	Secrets     []SecretSpec `json:"secrets"`
 	TTL         string       `json:"ttl,omitempty"`
-	CallbackURL string       `json:"callback_url,omitempty"`
+	// Linger is how long the payload stays readable after the first retrieve.
+	// Empty or "0s" burns on the next lookup; the server caps the maximum.
+	Linger      string `json:"linger,omitempty"`
+	CallbackURL string `json:"callback_url,omitempty"`
 }
 
 type SetTextRequest struct {
@@ -59,20 +62,27 @@ type CreateResponse struct {
 	// ManageURL carries the owner token. Creation redirects here so the two
 	// links survive a refresh instead of living only in page state.
 	ManageURL string `json:"manage_url"`
-	ExpiresAt string `json:"expires_at"`
+	// DestroyURL is DELETE with the manage id. It is the API form of ManageURL,
+	// which is an HTML page with the token in the query string.
+	DestroyURL string `json:"destroy_url"`
+	SubmitID   string `json:"submit_id"`
+	RetrieveID string `json:"retrieve_id"`
+	ManageID   string `json:"manage_id"`
+	ExpiresAt  string `json:"expires_at"`
 }
 
 // EntryResponse is the non-secret view of an entry. Draft values appear only
 // for the submit token; the retrieve side gets values by consuming the entry.
 type EntryResponse struct {
-	Kind      Kind             `json:"kind"`
-	Role      string           `json:"role"`
-	Title     string           `json:"title"`
-	HTML      string           `json:"description_html,omitempty"`
-	Secrets   []SecretResponse `json:"secrets"`
-	Fulfilled bool             `json:"fulfilled"`
-	Retrieved bool             `json:"retrieved"`
-	ExpiresAt string           `json:"expires_at"`
+	Kind          Kind             `json:"kind"`
+	Role          string           `json:"role"`
+	Title         string           `json:"title"`
+	HTML          string           `json:"description_html,omitempty"`
+	Secrets       []SecretResponse `json:"secrets"`
+	Fulfilled     bool             `json:"fulfilled"`
+	Retrieved     bool             `json:"retrieved"`
+	ExpiresAt     string           `json:"expires_at"`
+	LingerSeconds int              `json:"linger_seconds"`
 
 	// Only populated for the manage role: the links the owner hands out.
 	SubmitURL   string `json:"submit_url,omitempty"`

@@ -28,7 +28,7 @@ func run() error {
 		return err
 	}
 
-	scratch, cleanup, err := openScratch(cfg.Scratch)
+	scratch, cleanup, err := openScratch(cfg.Scratch, cfg.SecretKey)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func run() error {
 // gets a private temp directory removed on exit: this service has no
 // persistence, and a leftover directory of half-delivered secrets would be
 // exactly that.
-func openScratch(dir string) (*Scratch, func(), error) {
+func openScratch(dir string, secret []byte) (*Scratch, func(), error) {
 	cleanup := func() {}
 	if dir == "" {
 		tmp, err := os.MkdirTemp("", "charon-")
@@ -90,7 +90,7 @@ func openScratch(dir string) (*Scratch, func(), error) {
 	} else if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, cleanup, err
 	}
-	s := NewScratch(dir)
+	s := NewScratch(dir, secret)
 	if err := s.Writable(); err != nil {
 		cleanup()
 		return nil, func() {}, err

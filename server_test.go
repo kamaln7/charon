@@ -18,7 +18,7 @@ func testServer(t *testing.T) *server {
 	t.Helper()
 	cfg := Config{BaseURL: "http://x", Limits: testLimits()}
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>ok</html>")}}
-	s, err := newServer(cfg, NewStore(cfg.Limits), NewScratch(t.TempDir()), web)
+	s, err := newServer(cfg, NewStore(cfg.Limits), NewScratch(t.TempDir(), []byte("test")), web)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,6 +170,45 @@ func TestManageTokenIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestDestroyRequiresManageToken(t *testing.T) {
+	s := testServer(t)
+	h := s.Handler()
+	e := &Entry{
+		Kind: api.KindRequest, Title: "t",
+		Secrets:    []Secret{{Name: "one", Type: api.TypeText}},
+		SubmitID:   NewID(),
+		RetrieveID: NewID(),
+		ManageID:   NewID(),
+		ExpiresAt:  timeNowPlusHour(),
+	}
+	s.store.Put(e)
+
+	for _, id := range []string{e.SubmitID, e.RetrieveID} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/e/"+id, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("DELETE as %s = %d, want 404", id, rec.Code)
+		}
+	}
+	if _, _, err := s.store.Lookup(e.RetrieveID); err != nil {
+		t.Fatalf("entry gone after rejected destroy: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/e/"+e.ManageID, nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("manage DELETE = %d, want 204", rec.Code)
+	}
+	if _, _, err := s.store.Lookup(e.RetrieveID); err != ErrNotFound {
+		t.Fatal("entry survived manage destroy")
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/e/"+e.ManageID, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("second DELETE = %d, want 404", rec.Code)
+	}
+}
+
 // The creator declares what each secret is. The API must hold them to it: a
 // file accepted onto a text secret is how a request for one token came back
 // with an unrelated file attached.
@@ -225,11 +264,68 @@ func TestCreateRejectsBadSchema(t *testing.T) {
 		"bare minimum":    `{"secrets":[{}]}`,
 		"explicit text":   `{"secrets":[{"type":"text"}]}`,
 		"explicit file":   `{"secrets":[{"type":"file"}]}`,
-		"every field set": `{"title":"t","description":"d","ttl":"1h","secrets":[{"name":"n","description":"d","type":"file"}]}`,
+		"every field set": `{"title":"t","description":"d","ttl":"1h","linger":"30s","secrets":[{"name":"n","description":"d","type":"file"}]}`,
 	} {
 		if code := do(h, "POST", "/api/requests", body); code != http.StatusCreated {
 			t.Errorf("%s: status %d, want 201", name, code)
 		}
+	}
+}
+
+func TestCreateResponseIncludesIDsAndDestroyURL(t *testing.T) {
+	h := testServer(t).Handler()
+	r := httptest.NewRequest("POST", "/api/requests", strings.NewReader(`{"title":"t","secrets":[{}]}`))
+	r.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.Bytes())
+	}
+	var got api.CreateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SubmitID == "" || got.RetrieveID == "" || got.ManageID == "" {
+		t.Fatalf("missing ids: %+v", got)
+	}
+	if !strings.HasSuffix(got.DestroyURL, "/api/e/"+got.ManageID) {
+		t.Errorf("destroy_url = %q, want .../api/e/%s", got.DestroyURL, got.ManageID)
+	}
+	if !strings.Contains(got.ManageURL, "token="+got.ManageID) {
+		t.Errorf("manage_url = %q, want token=%s", got.ManageURL, got.ManageID)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/e/"+got.ManageID, nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE destroy_url id = %d, want 204", rec.Code)
+	}
+}
+
+func TestCreateLingerDefaultsToZero(t *testing.T) {
+	h := testServer(t).Handler()
+	r := httptest.NewRequest("POST", "/api/requests", strings.NewReader(`{"secrets":[{}]}`))
+	r.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var created api.CreateResponse
+	json.Unmarshal(rec.Body.Bytes(), &created)
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/e/"+created.ManageID, nil))
+	var view api.EntryResponse
+	json.Unmarshal(rec.Body.Bytes(), &view)
+	if view.LingerSeconds != 0 {
+		t.Errorf("default linger_seconds = %d, want 0", view.LingerSeconds)
+	}
+
+	if code := do(h, "POST", "/api/requests", `{"secrets":[{}],"linger":"30s"}`); code != http.StatusCreated {
+		t.Errorf("linger 30s = %d, want 201", code)
+	}
+	if code := do(h, "POST", "/api/requests", `{"secrets":[{}],"linger":"1h"}`); code != http.StatusBadRequest {
+		t.Errorf("linger over cap = %d, want 400", code)
 	}
 }
 

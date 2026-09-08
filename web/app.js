@@ -33,11 +33,12 @@ const bytes = (n) => {
 
 // Go renders 60s as "1m0s"; nobody writes that. Build the phrase here instead
 // of shipping a duration string to the page.
-const lingerText = () => {
-  const s = cfg.linger_seconds ?? 60;
-  if (s < 60) return `${s} seconds`;
+const lingerPhrase = (seconds) => {
+  const s = seconds ?? 0;
+  if (s <= 0) return 'immediately';
+  if (s < 60) return `${s} seconds later`;
   const m = Math.round(s / 60);
-  return m === 1 ? 'a minute' : `${m} minutes`;
+  return m === 1 ? 'a minute later' : `${m} minutes later`;
 };
 
 const ttlLabel = (o) =>
@@ -297,6 +298,7 @@ function builder(form, mode) {
           title: view.querySelector('#title').value,
           description: desc.value(),
           ttl,
+          linger: `${cfg.linger_seconds ?? 60}s`,
           secrets: rowEls.map((r) => ({
             name: r.querySelector('[data-name]').value,
             description: r.value().description || '',
@@ -313,9 +315,15 @@ function builder(form, mode) {
       // modes travel the same server-side path. A failed fill retries the
       // same draft instead of creating another.
       const id = form.dataset.submitId;
+      const draft = await api('GET', `/api/e/${id}`);
       for (const [i, r] of rowEls.entries()) {
         const v = r.value();
         if (v.text) await api('PUT', `/api/e/${id}/text/${i}`, { text: v.text });
+        // Replace files rather than append, so a retried send does not
+        // duplicate uploads that already landed.
+        for (let j = (draft.secrets[i].files || []).length - 1; j >= 0; j--) {
+          await api('DELETE', `/api/e/${id}/files/${i}/${j}`);
+        }
         for (const f of v.files || []) {
           const fd = new FormData();
           fd.append('file', f, f.name);
@@ -361,7 +369,7 @@ function linkCard({ step, label, url, keep, note }) {
 
 // The manage page. Reached by redirect after creating, and bookmarkable: the
 // owner token is in the query string, so a refresh still shows the links.
-function manageView(created) {
+function manageView(id, created) {
   const requesting = created.kind !== 'send';
   const view = el(`
     <div>
@@ -369,10 +377,20 @@ function manageView(created) {
       <p class="lede">Expires ${new Date(created.expires_at).toLocaleString()}.</p>
       <section id="links"></section>
       <section>
-        <p class="note">Reading the secret destroys it ${lingerText()} later.</p>
+        <p class="note">Reading the secret destroys it ${lingerPhrase(created.linger_seconds)}.</p>
+        <button type="button" class="btn" data-variant="ghost" id="destroy">Destroy now</button>
         <p class="note"><a href="/">Create another</a></p>
       </section>
     </div>`);
+  view.querySelector('#destroy').addEventListener('click', async () => {
+    if (!(await confirmed('Destroy this now? Existing links will stop working.'))) return;
+    try {
+      await api('DELETE', `/api/e/${id}`);
+      show(el(`<div class="center"><h1>Destroyed</h1><p class="lede">The links no longer work.</p></div>`));
+    } catch (err) {
+      fatal(err.message);
+    }
+  });
   const links = view.querySelector('#links');
 
   if (requesting) {
@@ -560,7 +578,7 @@ function retrieveView(id, e) {
     <div>
       <h1>${esc(e.title)}</h1>
       ${e.description_html ? `<div class="md lede">${e.description_html}</div>` : ''}
-      <p class="lede">Revealing this destroys it ${lingerText()} later.</p>
+      <p class="lede">Revealing this destroys it ${lingerPhrase(e.linger_seconds)}.</p>
       <section><button type="button" class="btn btn-block" id="reveal">Reveal</button></section>
     </div>`);
   view.querySelector('#reveal').addEventListener('click', async (ev) => {
@@ -636,7 +654,7 @@ async function boot() {
     const e = await api('GET', `/api/e/${id}`);
     switch (e.role) {
       case 'manage':
-        return manageView(e);
+        return manageView(id, e);
       case 'submit':
         return e.fulfilled ? fatal('This has already been submitted.') : submitForm(id, e);
       default:

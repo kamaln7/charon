@@ -66,8 +66,8 @@ func testMain(m *testing.M) int {
 		time.Sleep(50 * time.Millisecond)
 	}
 	os.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
-	os.Setenv("CHARON_SCRATCH", filepath.Join(tmp, "receipts"))
-	os.MkdirAll(os.Getenv("CHARON_SCRATCH"), 0o700)
+	os.Setenv("CHARON_SCRATCH_DIR", filepath.Join(tmp, "receipts"))
+	os.MkdirAll(os.Getenv("CHARON_SCRATCH_DIR"), 0o700)
 	return m.Run()
 }
 
@@ -126,8 +126,8 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	link, handle := line(out, "LINK"), line(out, "HANDLE")
-	if link == "" || handle == "" || line(out, "EXPIRES") == "" {
+	link, handle := line(out, "LINK"), line(out, "RETRIEVE_HANDLE")
+	if link == "" || handle == "" || line(out, "EXPIRES") == "" || line(out, "MANAGE_HANDLE") == "" || line(out, "TITLE") == "" {
 		t.Fatalf("request output missing fields:\n%s", out)
 	}
 
@@ -139,7 +139,7 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 	}()
 
 	start := time.Now()
-	stdout, stderr, err := runCtl(t, "", "await", "--timeout", "10s", "--env", "--cleanup-after", "0", "--handle", handle)
+	stdout, stderr, err := runCtl(t, "", "await", "--timeout", "10s", "--env", "--cleanup-after", "0", "--retrieve-handle", handle)
 	if err != nil {
 		t.Fatal(err, stderr)
 	}
@@ -172,36 +172,36 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 
 	// A second await answers from the receipt, even though charon has now
 	// consumed the entry.
-	stdout2, _, err := runCtl(t, "", "await", "--env", "--cleanup-after", "0", "--handle", handle)
+	stdout2, _, err := runCtl(t, "", "await", "--env", "--cleanup-after", "0", "--retrieve-handle", handle)
 	if err != nil || stdout2 != stdout {
 		t.Errorf("second await: err=%v, same output=%v", err, stdout2 == stdout)
 	}
 
 	// get: to stdout, to a file with a mode, and blank as its own exit code.
-	got, _, err := runCtl(t, "", "get", "--handle", handle, "--name", "API_TOKEN")
+	got, _, err := runCtl(t, "", "get", "--retrieve-handle", handle, "--name", "API_TOKEN")
 	if err != nil || got != token {
 		t.Errorf("get API_TOKEN = %q, %v", got, err)
 	}
 	keyPath := filepath.Join(t.TempDir(), "k")
-	if _, _, err := runCtl(t, "", "get", "--to", keyPath, "--mode", "0400", "--handle", handle, "--name", "DEPLOY_KEY"); err != nil {
+	if _, _, err := runCtl(t, "", "get", "--to", keyPath, "--mode", "0400", "--retrieve-handle", handle, "--name", "DEPLOY_KEY"); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := os.Stat(keyPath); st.Mode().Perm() != 0o400 {
 		t.Errorf("--mode 0400 gave %v", st.Mode().Perm())
 	}
-	_, _, err = runCtl(t, "", "get", "--handle", handle, "--name", "OPTIONAL_NOTE")
+	_, _, err = runCtl(t, "", "get", "--retrieve-handle", handle, "--name", "OPTIONAL_NOTE")
 	var ec exitCode
 	if !errors.As(err, &ec) || ec.code != exitBlank {
 		t.Errorf("get on a blank field: err=%v, want exit %d", err, exitBlank)
 	}
 
-	if _, _, err := runCtl(t, "", "cleanup", "--handle", handle); err != nil {
+	if _, _, err := runCtl(t, "", "cleanup", "--retrieve-handle", handle); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadReceipt(handle); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("receipt survived cleanup: %v", err)
 	}
-	_, _, err = runCtl(t, "", "get", "--handle", handle, "--name", "API_TOKEN")
+	_, _, err = runCtl(t, "", "get", "--retrieve-handle", handle, "--name", "API_TOKEN")
 	if !errors.As(err, &ec) || ec.code != exitTimeout {
 		t.Errorf("get after cleanup: err=%v, want exit %d", err, exitTimeout)
 	}
@@ -224,7 +224,7 @@ func TestRequestRejectsBadNamesAndUnknownFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view, err := newClient(serverURL).view(line(out, "HANDLE"), 0)
+	view, err := newClient(serverURL).view(line(out, "RETRIEVE_HANDLE"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,12 +239,12 @@ func TestAwaitTimeoutAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = runCtl(t, "", "await", "--timeout", "300ms", "--handle", line(out, "HANDLE"))
+	_, _, err = runCtl(t, "", "await", "--timeout", "300ms", "--retrieve-handle", line(out, "RETRIEVE_HANDLE"))
 	var ec exitCode
 	if !errors.As(err, &ec) || ec.code != exitTimeout {
 		t.Errorf("timeout: err=%v, want exit %d", err, exitTimeout)
 	}
-	_, _, err = runCtl(t, "", "await", "--timeout", "1s", "--handle", "aaaaaaaaaaaaaaaaaaaaaaaa")
+	_, _, err = runCtl(t, "", "await", "--timeout", "1s", "--retrieve-handle", "aaaaaaaaaaaaaaaaaaaaaaaa")
 	if !errors.As(err, &ec) || ec.code != exitTimeout {
 		t.Errorf("unknown handle: err=%v, want exit %d", err, exitTimeout)
 	}
@@ -252,9 +252,20 @@ func TestAwaitTimeoutAndExpiry(t *testing.T) {
 
 func TestSendRoundTrip(t *testing.T) {
 	t.Setenv("CHARON_API", serverURL)
+	t.Setenv("CHARON_SEND_TOKEN", "from-env")
 	keyFile := filepath.Join(t.TempDir(), "gen.pem")
 	os.WriteFile(keyFile, []byte("PEM"), 0o600)
-	spec := `{"title":"generated key","secrets":[{"name":"passphrase","text":"correct horse"},{"name":"key","file":"` + keyFile + `"}]}`
+	textFile := filepath.Join(t.TempDir(), "token")
+	os.WriteFile(textFile, []byte("from-file"), 0o600)
+	extra := filepath.Join(t.TempDir(), "extra.pem")
+	os.WriteFile(extra, []byte("EXTRA"), 0o600)
+	spec := `{"title":"generated key","secrets":[
+		{"name":"passphrase","text":"correct horse"},
+		{"name":"key","type":"file","file":"` + keyFile + `"},
+		{"name":"bundle","files":["` + keyFile + `","` + extra + `"]},
+		{"name":"from_env","env":"CHARON_SEND_TOKEN"},
+		{"name":"from_text_file","text_file":"` + textFile + `"}
+	]}`
 	out, _, err := runCtl(t, spec, "send")
 	if err != nil {
 		t.Fatal(err)
@@ -265,20 +276,59 @@ func TestSendRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if line(out, "TITLE") != "generated key" {
+		t.Errorf("TITLE = %q", line(out, "TITLE"))
+	}
 	if got.Secrets[0].Text == nil || *got.Secrets[0].Text != "correct horse" {
 		t.Errorf("text = %v", got.Secrets[0].Text)
 	}
 	if got.Secrets[1].Type != api.TypeFile || len(got.Secrets[1].Files) != 1 || got.Secrets[1].Files[0].Filename != "gen.pem" {
 		t.Errorf("file = %+v", got.Secrets[1])
 	}
+	if got.Secrets[2].Type != api.TypeFile || len(got.Secrets[2].Files) != 2 {
+		t.Errorf("files = %+v", got.Secrets[2])
+	}
+	if got.Secrets[3].Text == nil || *got.Secrets[3].Text != "from-env" {
+		t.Errorf("env = %v", got.Secrets[3].Text)
+	}
+	if got.Secrets[4].Text == nil || *got.Secrets[4].Text != "from-file" {
+		t.Errorf("text_file = %v", got.Secrets[4].Text)
+	}
+	manage := line(out, "MANAGE_HANDLE")
+	if manage == "" {
+		t.Fatalf("send omitted MANAGE_HANDLE:\n%s", out)
+	}
+	if _, err := c.retrieve(tokenOf(link)); err == nil {
+		t.Fatal("second retrieve succeeded after linger 0")
+	}
 	for _, bad := range []string{
 		`{"secrets":[{"name":"both","text":"a","file":"` + keyFile + `"}]}`,
 		`{"secrets":[{"name":"neither"}]}`,
 		`{"secrets":[{"name":"missing","file":"/nonexistent"}]}`,
+		`{"secrets":[{"name":"missing_env","env":"CHARON_SEND_UNSET"}]}`,
+		`{"secrets":[{"name":"missing_text_file","text_file":"/nonexistent"}]}`,
+		`{"secrets":[{"name":"two","env":"CHARON_SEND_TOKEN","text":"x"}]}`,
+		`{"secrets":[{"name":"typed","type":"file","text":"x"}]}`,
+		`{"secrets":[{"name":"only_type","type":"file"}]}`,
 	} {
 		if _, _, err := runCtl(t, bad, "send"); err == nil {
 			t.Errorf("send accepted %s", bad)
 		}
+	}
+}
+
+func TestAbortSendDestroysDraft(t *testing.T) {
+	t.Setenv("CHARON_API", serverURL)
+	c := newClient(serverURL)
+	created, err := c.create(api.KindSend, api.CreateRequest{Secrets: []api.SecretSpec{{Name: "T"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := abortSend(c, created.ManageID, fail(exitError, "boom")); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("abortSend: %v", err)
+	}
+	if _, err := c.view(tokenOf(created.RetrieveURL), 0); err == nil {
+		t.Fatal("draft survived abortSend")
 	}
 }
 
@@ -391,17 +441,19 @@ func TestCLIFlags(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"await"}, "requires --handle"},
-		{[]string{"get", "--name", "TOKEN"}, "requires --handle"},
-		{[]string{"get", "--handle", "aaaaaaaaaaaaaaaaaaaaaaaa"}, "requires --name"},
-		{[]string{"cleanup"}, "requires --handle"},
+		{[]string{"await"}, "requires --retrieve-handle"},
+		{[]string{"get", "--name", "TOKEN"}, "requires --retrieve-handle"},
+		{[]string{"get", "--retrieve-handle", "aaaaaaaaaaaaaaaaaaaaaaaa"}, "requires --name"},
+		{[]string{"cleanup"}, "requires --retrieve-handle"},
+		{[]string{"destroy"}, "requires --manage-handle"},
+		{[]string{"status"}, "exactly one of --retrieve-handle or --manage-handle"},
 	} {
 		_, _, err := runCtl(t, "", tc.args...)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: %v, want %q", tc.args, err, tc.want)
 		}
 	}
-	for _, verb := range []string{"request", "await", "get", "cleanup", "send"} {
+	for _, verb := range []string{"request", "await", "get", "cleanup", "send", "status", "destroy"} {
 		for _, arg := range []string{"unexpected", "--unknown"} {
 			if _, _, err := runCtl(t, `{}`, verb, arg); err == nil {
 				t.Errorf("%s accepted %s", verb, arg)
@@ -423,9 +475,9 @@ func TestAutomaticCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle := line(out, "HANDLE")
+	handle := line(out, "RETRIEVE_HANDLE")
 	fillAndSubmit(t, line(out, "LINK"), map[int]string{0: "test value"}, nil)
-	cmd := exec.Command(bin, "await", "--handle", handle, "--timeout", "5s", "--cleanup-after", "200ms")
+	cmd := exec.Command(bin, "await", "--retrieve-handle", handle, "--timeout", "5s", "--cleanup-after", "200ms")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("await: %v: %s", err, out)
 	}
@@ -442,5 +494,129 @@ func TestAutomaticCleanup(t *testing.T) {
 			t.Fatalf("automatic cleanup did not remove receipt: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestCleanupHandleNotInArgvOrEnv(t *testing.T) {
+	handle := "cccccccccccccccccccccccc"
+	from, err := writeCleanupHandle(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(from)
+	raw, err := os.ReadFile(from)
+	if err != nil || strings.TrimSpace(string(raw)) != handle {
+		t.Fatalf("from file: %q, %v", raw, err)
+	}
+	cmd := cleanupCmd("/bin/true", time.Second, from)
+	for _, a := range cmd.Args {
+		if strings.Contains(a, handle) {
+			t.Fatalf("handle in argv: %v", cmd.Args)
+		}
+	}
+	for _, e := range cmd.Env {
+		if strings.Contains(e, handle) {
+			t.Fatalf("handle in env: %s", e)
+		}
+	}
+}
+
+func TestCleanupFromFile(t *testing.T) {
+	handle := "cccccccccccccccccccccccc"
+	dir, err := receiptDir(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	from, err := writeCleanupHandle(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runCtl(t, "", "cleanup", "--from", from); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("receipt survived --from cleanup")
+	}
+	if _, err := os.Stat(from); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("from file survived cleanup")
+	}
+}
+
+func TestStatusAndWrongHandleRole(t *testing.T) {
+	t.Setenv("CHARON_API", serverURL)
+	out, _, err := runCtl(t, `{"title":"status-me","secrets":[{"name":"X"}]}`, "request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retrieve, manage := line(out, "RETRIEVE_HANDLE"), line(out, "MANAGE_HANDLE")
+	got, _, err := runCtl(t, "", "status", "--manage-handle", manage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line(got, "TITLE") != "status-me" || line(got, "KIND") != "request" || line(got, "LINK") != line(out, "LINK") {
+		t.Fatalf("manage status:\n%s", got)
+	}
+	if line(got, "FULFILLED") != "false" || line(got, "RETRIEVE_HANDLE") != retrieve {
+		t.Fatalf("manage status fields:\n%s", got)
+	}
+	got, _, err = runCtl(t, "", "status", "--retrieve-handle", retrieve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line(got, "LINK") != "" || line(got, "TITLE") != "status-me" {
+		t.Fatalf("retrieve status should omit LINK:\n%s", got)
+	}
+
+	_, stderr, err := runCtl(t, "", "destroy", "--manage-handle", retrieve)
+	if err == nil || !strings.Contains(err.Error(), "retrieve handle") {
+		t.Fatalf("destroy with retrieve handle: err=%v stderr=%s", err, stderr)
+	}
+	_, _, err = runCtl(t, "", "await", "--timeout", "1s", "--retrieve-handle", manage)
+	if err == nil || !strings.Contains(err.Error(), "manage handle") {
+		t.Fatalf("await with manage handle: %v", err)
+	}
+}
+
+func TestRequestAwaitOnlyFlags(t *testing.T) {
+	t.Setenv("CHARON_API", serverURL)
+	for _, args := range [][]string{
+		{"request", "--cleanup-after", "1m"},
+		{"request", "--timeout", "1h"},
+	} {
+		_, _, err := runCtl(t, `{"secrets":[{"name":"X"}]}`, args...)
+		if err == nil || !strings.Contains(err.Error(), "requires --await") {
+			t.Errorf("%v: %v", args, err)
+		}
+	}
+}
+
+func TestSendLinger(t *testing.T) {
+	t.Setenv("CHARON_API", serverURL)
+	out, _, err := runCtl(t, `{"secrets":[{"name":"T","text":"v"}],"linger":"1s"}`, "send")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := newClient(serverURL).view(line(out, "MANAGE_HANDLE"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.LingerSeconds != 1 {
+		t.Errorf("linger_seconds = %d, want 1", view.LingerSeconds)
+	}
+	if _, _, err := runCtl(t, "", "destroy", "--manage-handle", line(out, "MANAGE_HANDLE")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runCtl(t, `{"secrets":[{"name":"T","text":"v"}],"linger":"1h"}`, "send"); err == nil {
+		t.Fatal("send accepted linger over the server cap")
+	}
+}
+
+func TestOldHandleFlag(t *testing.T) {
+	_, _, err := runCtl(t, "", "await", "--handle", "aaaaaaaaaaaaaaaaaaaaaaaa")
+	if err == nil || !strings.Contains(err.Error(), "--retrieve-handle or --manage-handle") {
+		t.Fatalf("old --handle: %v", err)
 	}
 }
