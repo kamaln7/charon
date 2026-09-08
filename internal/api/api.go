@@ -24,9 +24,6 @@ const (
 	TypeFile SecretType = "file"
 )
 
-// Every request and response body the API speaks. Nothing here is built from
-// map[string]any: the wire shape is the contract, so it lives in types.
-
 // ---------- requests ----------
 
 // SecretSpec describes one requested or supplied secret. Every field is

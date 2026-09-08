@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -94,7 +95,7 @@ type statusError struct {
 func (e statusError) Error() string { return e.msg }
 
 func errorf(code int, format string, args ...any) error {
-	return statusError{code: code, msg: sprintf(format, args...)}
+	return statusError{code: code, msg: fmt.Sprintf(format, args...)}
 }
 
 var errNotFound = statusError{code: http.StatusNotFound, msg: "not found"}
@@ -157,7 +158,7 @@ func logProblems(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sw := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(sw, r)
-		if sw.status >= 400 {
+		if sw.status >= 400 && sw.status != http.StatusNotFound && sw.status != http.StatusConflict {
 			log.Printf("%d %s %s", sw.status, r.Method, r.URL.Path)
 		}
 	})

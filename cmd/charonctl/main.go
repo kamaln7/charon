@@ -59,7 +59,7 @@ All operands use named flags; request and send read JSON from stdin.
 Server: CHARON_API overrides the optional JSON config's "api" field.
 Config: $XDG_CONFIG_HOME/charonctl/config.json (default ~/.config/charonctl/config.json).
 Without either, the server is http://localhost:1337.
-CHARON_SCRATCH is where collected values are kept (default the temp dir).`
+CHARON_SCRATCH is where collected values are kept (default the user cache).`
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {

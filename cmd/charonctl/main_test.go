@@ -119,7 +119,7 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	spec := `{"title":"deploy creds","secrets":[
-		{"name":"DO_TOKEN","description":"rw"},
+		{"name":"API_TOKEN","description":"rw"},
 		{"name":"DEPLOY_KEY","type":"file"},
 		{"name":"OPTIONAL_NOTE"}]}`
 	out, _, err := runCtl(t, spec, "request")
@@ -147,7 +147,7 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 		t.Errorf("await took %v; long-poll is not waking on submit", time.Since(start))
 	}
 	// stderr says what happened, without values.
-	for _, want := range []string{"set DO_TOKEN (", "file DEPLOY_KEY (id_ed25519, 17 bytes)", "blank OPTIONAL_NOTE"} {
+	for _, want := range []string{"set API_TOKEN (", "file DEPLOY_KEY (id_ed25519, 17 bytes)", "blank OPTIONAL_NOTE"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr missing %q:\n%s", want, stderr)
 		}
@@ -156,7 +156,7 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 		t.Errorf("stderr leaked a value:\n%s", stderr)
 	}
 	// stdout is eval-safe: run it through a real shell and read the result back.
-	script := stdout + `printf '%s' "$DO_TOKEN" > "$OUT/tok"; cp "$DEPLOY_KEY_FILE" "$OUT/key"; [ -z "${OPTIONAL_NOTE+x}" ]`
+	script := stdout + `printf '%s' "$API_TOKEN" > "$OUT/tok"; cp "$DEPLOY_KEY_FILE" "$OUT/key"; [ -z "${OPTIONAL_NOTE+x}" ]`
 	outDir := t.TempDir()
 	sh := exec.Command("sh", "-c", script)
 	sh.Env = append(os.Environ(), "OUT="+outDir)
@@ -178,9 +178,9 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 	}
 
 	// get: to stdout, to a file with a mode, and blank as its own exit code.
-	got, _, err := runCtl(t, "", "get", "--handle", handle, "--name", "DO_TOKEN")
+	got, _, err := runCtl(t, "", "get", "--handle", handle, "--name", "API_TOKEN")
 	if err != nil || got != token {
-		t.Errorf("get DO_TOKEN = %q, %v", got, err)
+		t.Errorf("get API_TOKEN = %q, %v", got, err)
 	}
 	keyPath := filepath.Join(t.TempDir(), "k")
 	if _, _, err := runCtl(t, "", "get", "--to", keyPath, "--mode", "0400", "--handle", handle, "--name", "DEPLOY_KEY"); err != nil {
@@ -201,7 +201,7 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 	if _, err := loadReceipt(handle); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("receipt survived cleanup: %v", err)
 	}
-	_, _, err = runCtl(t, "", "get", "--handle", handle, "--name", "DO_TOKEN")
+	_, _, err = runCtl(t, "", "get", "--handle", handle, "--name", "API_TOKEN")
 	if !errors.As(err, &ec) || ec.code != exitTimeout {
 		t.Errorf("get after cleanup: err=%v, want exit %d", err, exitTimeout)
 	}

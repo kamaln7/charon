@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -187,6 +188,9 @@ func (s *Store) Reserve(n int64) error {
 }
 
 func (s *Store) Release(n int64) {
+	if n == 0 {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.total -= n
@@ -227,38 +231,65 @@ func (s *Store) view(e *Entry, read func() api.EntryResponse) api.EntryResponse 
 	return read()
 }
 
+func (s *Store) mintLocked(e *Entry) {
+	if e.minted != nil {
+		return
+	}
+	e.minted = make([]Secret, len(e.Secrets))
+	copy(e.minted, e.Secrets)
+	for i := range e.minted {
+		files := make([]File, len(e.minted[i].Files))
+		copy(files, e.minted[i].Files)
+		for j := range files {
+			files[j].token = NewID()
+			s.byFile[files[j].token] = files[j]
+		}
+		e.minted[i].Files = files
+	}
+}
+
+// snapshot is the payload without starting linger. Callbacks use this so a
+// failed webhook does not consume the retrieve link.
+func (s *Store) snapshot(e *Entry) ([]Secret, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !e.Fulfilled {
+		return nil, ErrPending
+	}
+	s.mintLocked(e)
+	return e.minted, nil
+}
+
 // Retrieve hands back the payload. The first call starts the linger clock and
-// mints one-shot download tokens; later calls inside the window return exactly
-// the same thing, so a retry or a dropped connection is not a lost secret.
+// mints download tokens; later calls inside the window return exactly the
+// same thing, so a retry or a dropped connection is not a lost secret.
 func (s *Store) Retrieve(e *Entry) ([]Secret, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !e.Fulfilled {
 		return nil, ErrPending
 	}
+	s.mintLocked(e)
 	if e.ConsumedAt.IsZero() {
 		e.ConsumedAt = time.Now()
-		e.minted = make([]Secret, len(e.Secrets))
-		copy(e.minted, e.Secrets)
-		for i := range e.minted {
-			files := make([]File, len(e.minted[i].Files))
-			copy(files, e.minted[i].Files)
-			for j := range files {
-				files[j].token = NewID()
-				s.byFile[files[j].token] = files[j]
-			}
-			e.minted[i].Files = files
-		}
 	}
 	return e.minted, nil
 }
 
-// Unconsume reopens an entry whose delivery failed, so the retrieve link keeps
-// working instead of the secret self-destructing into a webhook that was down.
+// Unconsume drops a snapshot that was never retrieved, so a failed webhook
+// does not start linger. If someone already retrieved, this is a no-op.
 func (s *Store) Unconsume(e *Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e.ConsumedAt = time.Time{}
+	if !e.ConsumedAt.IsZero() {
+		return
+	}
+	for _, sec := range e.minted {
+		for _, f := range sec.Files {
+			delete(s.byFile, f.token)
+		}
+	}
+	e.minted = nil
 }
 
 // TakeFile resolves a download token. Tokens survive until the entry itself is
@@ -274,11 +305,25 @@ func (s *Store) TakeFile(token string) (File, error) {
 }
 
 // AddFile spools a drafted file onto a secret.
-func (s *Store) AddFile(e *Entry, idx int, f File) {
+func (s *Store) AddFile(e *Entry, idx int, f File) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.byID[e.SubmitID]; !ok {
+		return ErrNotFound
+	}
+	if e.Fulfilled {
+		return ErrFulfilled
+	}
+	n := 0
+	for _, sec := range e.Secrets {
+		n += len(sec.Files)
+	}
+	if n >= s.limits.MaxFiles {
+		return fmt.Errorf("at most %d files", s.limits.MaxFiles)
+	}
 	e.Secrets[idx].Files = append(e.Secrets[idx].Files, f)
 	e.bytes += f.Size
+	return nil
 }
 
 // DropFile removes a drafted file and reclaims its bytes. It returns the path
@@ -308,11 +353,14 @@ func (s *Store) CountFiles(e *Entry) int {
 }
 
 // SetText replaces one secret's text. This is the autosave path: the form PUTs
-// each field as you type, so backgrounding Telegram costs nothing. Only the
-// growth is charged, checked under the same lock that applies it.
+// each field as you type, so backgrounding the submit page costs nothing. Only
+// the growth is charged, checked under the same lock that applies it.
 func (s *Store) SetText(e *Entry, idx int, text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if e.Fulfilled {
+		return ErrFulfilled
+	}
 	delta := int64(len(text)) - int64(len(e.Secrets[idx].Text))
 	if delta > 0 && s.total+delta > s.limits.MaxTotalBytes {
 		return ErrFull
@@ -328,6 +376,9 @@ func (s *Store) SetText(e *Entry, idx int, text string) error {
 func (s *Store) destroy(e *Entry) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.byID[e.SubmitID]; !ok {
+		return nil
+	}
 	delete(s.byID, e.SubmitID)
 	delete(s.byID, e.RetrieveID)
 	delete(s.byID, e.ManageID)

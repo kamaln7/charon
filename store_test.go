@@ -194,6 +194,67 @@ func TestParseTTL(t *testing.T) {
 	}
 }
 
+func TestUnconsumeDropsMintedTokens(t *testing.T) {
+	s := NewStore(testLimits())
+	e := newTestEntry(s, time.Hour)
+	e.Secrets[0].Type = api.TypeFile
+	e.Secrets[0].Files = []File{{Name: "k", Size: 1, path: "x"}}
+	s.Submit(e)
+
+	got, err := s.snapshot(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := got[0].Files[0].token
+	if _, err := s.TakeFile(token); err != nil {
+		t.Fatalf("token missing after snapshot: %v", err)
+	}
+
+	s.Unconsume(e)
+	if _, err := s.TakeFile(token); err != ErrNotFound {
+		t.Fatalf("old token survived unconsume: %v", err)
+	}
+	if e.minted != nil {
+		t.Fatal("unconsume left minted state behind")
+	}
+
+	got2, err := s.Retrieve(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2[0].Files[0].token == token {
+		t.Fatal("retrieve reused the dropped token")
+	}
+
+	s.Unconsume(e)
+	if _, err := s.TakeFile(got2[0].Files[0].token); err != nil {
+		t.Fatal("unconsume after retrieve dropped a live token")
+	}
+}
+
+func TestSetTextRejectedAfterSubmit(t *testing.T) {
+	s := NewStore(testLimits())
+	e := newTestEntry(s, time.Hour)
+	s.Submit(e)
+	if err := s.SetText(e, 0, "late"); err != ErrFulfilled {
+		t.Fatalf("SetText after submit: %v", err)
+	}
+	if err := s.AddFile(e, 0, File{Name: "x", Size: 1}); err != ErrFulfilled {
+		t.Fatalf("AddFile after submit: %v", err)
+	}
+}
+
+func TestDestroyIsIdempotent(t *testing.T) {
+	s := NewStore(testLimits())
+	e := newTestEntry(s, time.Hour)
+	s.SetText(e, 0, "abc")
+	s.destroy(e)
+	s.destroy(e)
+	if s.total != 0 {
+		t.Fatalf("double destroy: total=%d", s.total)
+	}
+}
+
 // IDs are the only thing protecting an entry, so they must not be sequential.
 func TestIDsAreUnguessable(t *testing.T) {
 	seen := make(map[string]bool)

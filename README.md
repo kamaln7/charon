@@ -1,6 +1,7 @@
 # charon
 
 One-way delivery for secrets. Nothing is persisted, nothing survives a restart.
+You run this yourself: there is no public instance.
 
 Two modes, one mechanism:
 
@@ -41,7 +42,7 @@ trade: **run this only on a network you trust.**
   directory (mount a tmpfs over it). A restart drops everything, including
   half-finished drafts.
 - **Drafts autosave.** The submit form PUTs each field as you type, so a
-  Telegram webview being suspended mid-form costs nothing. Files upload the
+  mobile webview being suspended mid-form costs nothing. Files upload the
   moment they are picked.
 - **Retrieval lingers, then self-destructs.** The first read starts a timer
   (`CHARON_LINGER`, default 60s); reads inside that window return the identical
@@ -60,11 +61,11 @@ trade: **run this only on a network you trust.**
 Create a request — this is the endpoint an agent calls:
 
 ```console
-curl -X POST https://secrets.example/api/requests -H 'Content-Type: application/json' -d '{
-  "title": "DigitalOcean deploy credentials",
-  "description": "Needed for the MCP server config.",
+curl -X POST https://charon.example/api/requests -H 'Content-Type: application/json' -d '{
+  "title": "Deploy credentials",
+  "description": "Needed for the deployment.",
   "secrets": [
-    {"name": "DO_API_TOKEN", "description": "read+write, no expiry"},
+    {"name": "API_TOKEN", "description": "read+write, no expiry"},
     {"name": "deploy key",   "description": "the private key file", "type": "file"}
   ],
   "ttl": "1h"
@@ -81,22 +82,24 @@ form renders one control per secret accordingly.
 
 ```jsonc
 {
-  "submit_url":   "https://secrets.example/e/fwlascooqxofa2ekujikwweq",  // hand this out
-  "retrieve_url": "https://secrets.example/e/po3nkmdgisdb5veespq6hfph",  // keep this
-  "poll_url":     "https://secrets.example/api/e/po3nkmdgisdb5veespq6hfph",
-  "manage_url":   "https://secrets.example/manage?token=kwwyvma5t53x4ulperhpuamo",
+  "submit_url":   "https://charon.example/e/fwlascooqxofa2ekujikwweq",  // hand this out
+  "retrieve_url": "https://charon.example/e/po3nkmdgisdb5veespq6hfph",  // keep this
+  "poll_url":     "https://charon.example/api/e/po3nkmdgisdb5veespq6hfph",
+  "manage_url":   "https://charon.example/manage?token=kwwyvma5t53x4ulperhpuamo",
   "expires_at":   "2026-09-03T14:59:51Z"
 }
 ```
 
-Then **wait on `poll_url` until `fulfilled` is true** and `POST` the retrieve
-URL once. `?wait=30s` turns the poll into a long poll: the response is held
-until the other side submits, the entry dies, or the window (capped at 60s)
-elapses, then answers as a plain GET would. Loop on it instead of sleeping between requests.
+Then **wait on `poll_url` until `fulfilled` is true** and POST
+`/api/e/{id}/retrieve` using the retrieve id (the last path segment of
+`poll_url` or `retrieve_url`). `?wait=30s` turns the poll into a long poll:
+the response is held until the other side submits, the entry dies, or the
+window (capped at 60s) elapses, then answers as a plain GET would. Loop on it
+instead of sleeping between requests.
 
 ```console
-curl "https://secrets.example/api/e/<retrieve_id>?wait=30s"  # {"fulfilled": false, ...}
-curl -X POST https://secrets.example/api/e/<retrieve_id>/retrieve
+curl "https://charon.example/api/e/<retrieve_id>?wait=30s"  # {"fulfilled": false, ...}
+curl -X POST https://charon.example/api/e/<retrieve_id>/retrieve
 ```
 
 A submitter may skip a field: the form asks them to confirm, then submits. Both
@@ -104,15 +107,15 @@ value keys are always present and `null` when skipped, so "they left it blank"
 is distinguishable from "this version does not send that key".
 
 `POST .../retrieve` answers `409` until the other side submits, so polling it
-directly works too. Text values come inline; files come as one-shot URLs, valid
+directly works too. Text values come inline; files come as download URLs, valid
 until the entry self-destructs — an agent should not be handed a base64 blob.
 
 ```jsonc
 {
-  "title": "DigitalOcean deploy credentials",
+  "title": "Deploy credentials",
   "destructs_at": "2026-09-03T13:59:56Z",
   "secrets": [
-    {"name": "DO_API_TOKEN", "type": "text", "text": "dop_v1_...", "files": null},
+    {"name": "API_TOKEN", "type": "text", "text": "tok_live_...", "files": null},
     {"name": "deploy key", "type": "file", "text": null,
      "files": [{"filename": "id_ed25519", "size": 411, "url": ".../api/f/lzzulu..."}]},
     {"name": "optional note", "type": "text", "text": null, "files": null}
@@ -141,7 +144,7 @@ and configure your server in `$XDG_CONFIG_HOME/charonctl/config.json` (default
 `~/.config/charonctl/config.json`, also on macOS):
 
 ```json
-{"api":"https://secrets.example"}
+{"api":"https://charon.example"}
 ```
 
 `CHARON_API` overrides `api`; without either, the server defaults to
@@ -153,17 +156,17 @@ work without reading the server config.
 Operands use named flags. `request` and `send` read their JSON spec from stdin.
 
 ```console
-$ echo '{"secrets":[{"name":"DO_TOKEN"},{"name":"DEPLOY_KEY","type":"file"}]}' \
+$ echo '{"secrets":[{"name":"API_TOKEN"},{"name":"DEPLOY_KEY","type":"file"}]}' \
     | charonctl request
-LINK https://secrets.example/e/fwlascooqxofa2ekujikwweq
+LINK https://charon.example/e/fwlascooqxofa2ekujikwweq
 EXPIRES 2026-09-04T13:59:51Z
 HANDLE po3nkmdgisdb5veespq6hfph
 
 $ charon_exports=$(charonctl await --env --handle po3nkmdgisdb5veespq6hfph) || exit "$?"
 collected "quiet-otter"
-set DO_TOKEN (71 chars)
+set API_TOKEN (71 chars)
 file DEPLOY_KEY (id_ed25519, 411 bytes)
-receipt /tmp/charonctl-po3nkmdgisdb5veespq6hfph
+receipt ~/.cache/charonctl/charonctl-po3nkmdgisdb5veespq6hfph
 $ eval "$charon_exports"
 $ unset charon_exports
 
@@ -175,7 +178,7 @@ $ charonctl cleanup --handle po3nkmdgisdb5veespq6hfph
   `1d`, and insists every name is a shell identifier, because `--env` turns
   them into variables. `--await` continues straight into `await`.
 - `await` long-polls, collects once, and keeps the values in a private
-  receipt directory (`CHARON_SCRATCH`, default the temp dir). Later calls
+  receipt directory (`CHARON_SCRATCH`, default the user cache). Later calls
   answer from the receipt, so charon's linger window never matters. What was
   set goes to stderr, values never do; `--env` writes `export` lines to
   stdout, files as `NAME_FILE=path`. The receipt is removed after
@@ -201,7 +204,7 @@ Instead of polling, a caller can pass `callback_url` and be pushed the payload
 the moment the other side submits:
 
 ```jsonc
-{"secrets": [{"name": "DO_API_TOKEN"}], "callback_url": "http://hermes:9119/hook"}
+{"secrets": [{"name": "API_TOKEN"}], "callback_url": "http://hooks.internal:8080/hook"}
 ```
 
 A caller-supplied URL is a "make my server issue a request" primitive, so the
@@ -211,19 +214,19 @@ expression evaluated against the URL's parts:
 
 | Field | Example | Notes |
 |---|---|---|
-| `url` | `http://hermes:9119/hook` | the whole thing |
+| `url` | `http://hooks.internal:8080/hook` | the whole thing |
 | `scheme` | `http` | only `http`/`https` ever reach the rule |
-| `host` | `hermes:9119` | as written, port included |
-| `hostname` | `hermes` | no port; IPv6 debracketed |
-| `port` | `9119` | a number — defaults to 80/443 when the URL omits it |
+| `host` | `hooks.internal:8080` | as written, port included |
+| `hostname` | `hooks.internal` | no port; IPv6 debracketed |
+| `port` | `8080` | a number — defaults to 80/443 when the URL omits it |
 | `path`, `query`, `fragment`, `user` | `/hook` | |
-| `ip` | `192.168.0.3` | **only when the host is a literal IP** |
+| `ip` | `192.168.0.10` | **only when the host is a literal IP** |
 
 ```sh
-CHARON_CALLBACK_RULE='hostname == "hermes" and port == 9119'
+CHARON_CALLBACK_RULE='hostname == "hooks.internal" and port == 8080'
 CHARON_CALLBACK_RULE='scheme == "https" and hostname matches /\.internal$/'
 CHARON_CALLBACK_RULE='ip in 192.168.0.0/16'
-CHARON_CALLBACK_RULE='hostname in ["hermes", "localhost"]'
+CHARON_CALLBACK_RULE='hostname in ["hooks.internal", "localhost"]'
 CHARON_CALLBACK_RULE='true'   # allow anything — only on a trusted network
 ```
 
@@ -245,30 +248,13 @@ Delivery is retried three times. If every attempt fails the entry is released
 rather than consumed, so the retrieve link still works — a webhook that happened
 to be down does not destroy the secret.
 
-## Telegram Mini App
+## Hermes
 
-The frontend works as a [Mini App](https://core.telegram.org/bots/webapps)
-without charon knowing anything about your bot.
-
-1. In BotFather: `/newapp`, pick your bot, short name (e.g. `secrets`), URL
-   pointing at your charon.
-2. Link straight to one entry by appending the submit token as `startapp`:
-
-   ```
-   https://t.me/<bot>/<app>?startapp=<the id from submit_url>
-   ```
-
-   Telegram hands that back to the page as `initDataUnsafe.start_param`, which
-   is the only Mini App wiring charon has. A bot can send the link as plain
-   text — no inline-keyboard payload needed.
-
-charon does **not** verify Telegram identities, and holds no bot token or bot
-name: possession of a link is the whole security model. Whoever owns the bot
-composes the `t.me` link, because they are the one who knows its name.
-
-> The page is loaded by **your device**, not by Telegram's servers. If charon is
-> only reachable on a LAN or a VPN, the Mini App works only when your phone is on
-> that network. The TLS certificate must be publicly trusted either way.
+A typical pairing is Hermes (or any bot) that delivers the submit link and,
+optionally, receives `callback_url`. If that link is opened as a Telegram Mini
+App, the page reads `start_param` as the entry id. Charon holds no bot token
+and does not check identities: possession of the link is still the whole
+security model.
 
 ## Configuration
 
@@ -309,7 +295,7 @@ services:
     build: https://github.com/kamaln7/charon.git
     restart: unless-stopped
     environment:
-      CHARON_BASE_URL: https://secrets.example
+      CHARON_BASE_URL: https://charon.example
     tmpfs:
       - /scratch:size=512m,uid=65532,gid=65532
     read_only: true
@@ -345,10 +331,11 @@ a network with no route to a CDN. Two things to know if you touch it:
 | `main.go` | wiring, scratch setup, the reaper |
 | `server.go` | routes, middleware, handler plumbing |
 | `handlers.go` | one function per endpoint |
-| `model.go` | every request and response type, and the conversions |
+| `model.go` | conversions between store types and the wire API |
+| `internal/api` | wire request and response types |
 | `store.go` | entries, tokens, byte accounting — memory only |
 | `scratch.go` | the disk side: expiry-encoded filenames and sweeps |
-| `callback.go`, `telegram.go`, `ttl.go`, `config.go`, `names.go` | as named |
+| `callback.go`, `ttl.go`, `config.go`, `names.go` | as named |
 
 Scratch filenames are `<unix expiry>-<random>`. The store deletes files as
 their entries die, but it only knows about entries this process created — a

@@ -63,7 +63,9 @@ func run() error {
 	}
 	go func() {
 		<-ctx.Done()
-		httpSrv.Close()
+		shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		httpSrv.Shutdown(shut)
 	}()
 
 	log.Printf("charon listening on %s (base %s, scratch %s)", cfg.Addr, cfg.BaseURL, scratch.Dir())

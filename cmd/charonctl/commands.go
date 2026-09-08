@@ -140,10 +140,8 @@ func cmdGet(stdout io.Writer, handle, name, to, mode string) error {
 	if err := f.Chmod(os.FileMode(perm)); err != nil {
 		return err
 	}
-	if _, err := f.Write(b); err != nil {
-		return err
-	}
-	return f.Close()
+	_, err = f.Write(b)
+	return err
 }
 
 func cmdCleanup(handle string, after time.Duration) error {

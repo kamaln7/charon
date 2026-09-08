@@ -60,8 +60,9 @@ func TestSecurityHeaders(t *testing.T) {
 			t.Errorf("%s = %q, want %q", h, got, want)
 		}
 	}
-	if rec.Header().Get("Content-Security-Policy") == "" {
-		t.Error("no CSP header")
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "connect-src 'self'") || !strings.Contains(csp, "script-src 'self'") {
+		t.Errorf("CSP = %q", csp)
 	}
 }
 

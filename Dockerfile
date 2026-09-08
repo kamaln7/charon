@@ -1,5 +1,7 @@
 FROM golang:1.27-alpine AS build
 
+RUN apk add --no-cache ca-certificates
+
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -14,6 +16,7 @@ RUN mkdir -p /scratch
 FROM scratch
 
 COPY --from=build /charon /charon
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build --chown=65532:65532 /scratch /scratch
 
 USER 65532:65532

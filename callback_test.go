@@ -1,9 +1,12 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	rulekit "github.com/qpoint-io/rulekit/v2"
 )
@@ -24,27 +27,27 @@ func TestCallbackDisabledByDefault(t *testing.T) {
 	if c.Enabled() {
 		t.Fatal("a zero Callback reports itself enabled")
 	}
-	if err := c.Check("http://hermes:9119/hook"); err == nil {
+	if err := c.Check("http://hooks.internal:8080/hook"); err == nil {
 		t.Fatal("callback allowed with no rule configured")
 	}
 }
 
 func TestCallbackRuleMatching(t *testing.T) {
-	c := ruleFor(t, `hostname == "hermes" and port == 9119`)
+	c := ruleFor(t, `hostname == "hooks.internal" and port == 8080`)
 
 	for _, ok := range []string{
-		"http://hermes:9119/callback",
-		"http://hermes:9119/",
+		"http://hooks.internal:8080/callback",
+		"http://hooks.internal:8080/",
 	} {
 		if err := c.Check(ok); err != nil {
 			t.Errorf("Check(%q) = %v, want allowed", ok, err)
 		}
 	}
 	for _, bad := range []string{
-		"http://hermes:9120/callback",      // wrong port
-		"http://hermes/callback",           // port defaults to 80, not 9119
-		"http://evil.example/callback",     // wrong host
-		"http://hermes:9119@evil.example/", // userinfo trick: host is evil.example
+		"http://hooks.internal:8081/callback",      // wrong port
+		"http://hooks.internal/callback",           // port defaults to 80, not 8080
+		"http://evil.example/callback",             // wrong host
+		"http://hooks.internal:8080@evil.example/", // userinfo trick: host is evil.example
 	} {
 		if err := c.Check(bad); err == nil {
 			t.Errorf("Check(%q) = allowed, want rejected", bad)
@@ -56,7 +59,7 @@ func TestCallbackRuleMatching(t *testing.T) {
 // Unknown as a pass would let a rule silently stop constraining anything.
 func TestCallbackFailsClosedOnUnknownField(t *testing.T) {
 	c := ruleFor(t, `nonexistent_field == "x"`)
-	err := c.Check("http://hermes:9119/hook")
+	err := c.Check("http://hooks.internal:8080/hook")
 	if err == nil {
 		t.Fatal("a rule on a missing field allowed the callback")
 	}
@@ -82,30 +85,30 @@ func TestCallbackAllowAllRule(t *testing.T) {
 
 func TestCallbackCIDRRule(t *testing.T) {
 	c := ruleFor(t, `ip in 192.168.0.0/16`)
-	if err := c.Check("http://192.168.0.3:9119/hook"); err != nil {
+	if err := c.Check("http://192.168.0.10:8080/hook"); err != nil {
 		t.Errorf("in-range literal IP rejected: %v", err)
 	}
-	if err := c.Check("http://10.0.0.1:9119/hook"); err == nil {
+	if err := c.Check("http://10.0.0.1:8080/hook"); err == nil {
 		t.Error("out-of-range IP allowed")
 	}
 	// A hostname publishes no ip field, so a CIDR rule cannot match it. This is
 	// deliberate: resolving here would let a name pass the rule and then point
 	// somewhere else at delivery time.
-	if err := c.Check("http://hermes:9119/hook"); err == nil {
+	if err := c.Check("http://hooks.internal:8080/hook"); err == nil {
 		t.Error("hostname matched a CIDR rule; DNS must not be resolved")
 	}
 }
 
 func TestCallbackKVFields(t *testing.T) {
-	u, err := url.Parse("https://user@hermes.example:8443/hook/path?a=1#frag")
+	u, err := url.Parse("https://user@hook.example:8443/hook/path?a=1#frag")
 	if err != nil {
 		t.Fatal(err)
 	}
 	kv := callbackKV(u)
 	for field, want := range map[string]any{
 		"scheme":   "https",
-		"host":     "hermes.example:8443",
-		"hostname": "hermes.example",
+		"host":     "hook.example:8443",
+		"hostname": "hook.example",
 		"port":     8443,
 		"path":     "/hook/path",
 		"query":    "a=1",
@@ -118,6 +121,26 @@ func TestCallbackKVFields(t *testing.T) {
 	}
 	if _, ok := kv["ip"]; ok {
 		t.Error("a hostname produced an ip field")
+	}
+}
+
+func TestCallbackRefusesRedirects(t *testing.T) {
+	evil := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer evil.Close()
+	hop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, evil.URL, http.StatusFound)
+	}))
+	defer hop.Close()
+	c := Callback{Client: &http.Client{
+		Timeout: 2 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}}
+	if err := c.post(hop.URL, []byte(`{}`)); err == nil {
+		t.Fatal("followed a redirect")
 	}
 }
 

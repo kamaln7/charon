@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -76,9 +78,11 @@ func (s *server) viewEntry(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
 		select {
 		case <-s.store.Done(e):
-		case <-time.After(wait):
+		case <-timer.C:
 		case <-r.Context().Done():
 			return nil
 		}
@@ -150,7 +154,14 @@ func (s *server) addFile(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	s.store.AddFile(e, idx, f)
+	if err := s.store.AddFile(e, idx, f); err != nil {
+		s.scratch.Remove(f.path)
+		s.store.Release(f.Size)
+		if errors.Is(err, ErrFulfilled) || errors.Is(err, ErrNotFound) {
+			return err
+		}
+		return errorf(http.StatusBadRequest, "%v", err)
+	}
 	writeJSON(w, http.StatusOK, api.UploadResponse{Name: f.Name, Size: f.Size})
 	return nil
 }
@@ -264,7 +275,7 @@ func (s *server) draftTarget(r *http.Request, want api.SecretType) (*Entry, int,
 	}
 	// The creator said what each secret is. Honour that: a file uploaded to a
 	// text secret, or vice versa, is not what the requester asked for.
-	if got := e.Secrets[idx].Type; want != "" && got != want {
+	if got := e.Secrets[idx].Type; got != want {
 		return nil, 0, errorf(http.StatusBadRequest,
 			"secret %q is a %s secret, not %s", e.Secrets[idx].Name, got, want)
 	}
@@ -341,6 +352,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return errorf(http.StatusRequestEntityTooLarge, "request body too large")
+		}
 		return errorf(http.StatusBadRequest, "invalid JSON: %v", err)
 	}
 	// A second value means the body was not a single JSON object.
@@ -351,5 +366,5 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 }
 
 func contentDisposition(name string) string {
-	return fmt.Sprintf("attachment; filename*=UTF-8''%s", urlEscape(name))
+	return fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(name))
 }

@@ -16,6 +16,14 @@ const el = (html) => {
   return t.content.childElementCount === 1 ? t.content.firstElementChild : t.content;
 };
 
+const filePath = (u) => {
+  try {
+    return new URL(u, location.origin).pathname;
+  } catch {
+    return u;
+  }
+};
+
 const bytes = (n) => {
   if (!n) return '0 B';
   if (n < 1024) return `${n} B`;
@@ -284,22 +292,27 @@ function builder(form, mode) {
     btn.disabled = true;
 
     try {
-      const spec = {
-        title: view.querySelector('#title').value,
-        description: desc.value(),
-        ttl,
-        secrets: rowEls.map((r) => ({
-          name: r.querySelector('[data-name]').value,
-          description: r.value().description || '',
-          type: r.dataset.type,
-        })),
-      };
-      const created = await api('POST', requesting ? '/api/requests' : '/api/secrets', spec);
-      if (requesting) return location.assign(created.manage_url);
+      if (!form.dataset.submitId) {
+        const spec = {
+          title: view.querySelector('#title').value,
+          description: desc.value(),
+          ttl,
+          secrets: rowEls.map((r) => ({
+            name: r.querySelector('[data-name]').value,
+            description: r.value().description || '',
+            type: r.dataset.type,
+          })),
+        };
+        const created = await api('POST', requesting ? '/api/requests' : '/api/secrets', spec);
+        if (requesting) return location.assign(created.manage_url);
+        form.dataset.submitId = created.submit_url.split('/').pop();
+        form.dataset.manageUrl = created.manage_url;
+      }
 
       // Send mode fills the draft it just created and submits it, so both
-      // modes travel the same server-side path.
-      const id = created.submit_url.split('/').pop();
+      // modes travel the same server-side path. A failed fill retries the
+      // same draft instead of creating another.
+      const id = form.dataset.submitId;
       for (const [i, r] of rowEls.entries()) {
         const v = r.value();
         if (v.text) await api('PUT', `/api/e/${id}/text/${i}`, { text: v.text });
@@ -310,7 +323,7 @@ function builder(form, mode) {
         }
       }
       await api('POST', `/api/e/${id}/submit`);
-      location.assign(created.manage_url);
+      location.assign(form.dataset.manageUrl);
     } catch (e) {
       err.querySelector('p').textContent = e.message;
       err.hidden = false;
@@ -459,21 +472,25 @@ function submitForm(id, e) {
       const ta = el(`<textarea class="textarea mono" placeholder="paste the secret"></textarea>`);
       ta.value = sec.text || '';
       body.append(ta);
-      // Autosave: the draft exists so Telegram can suspend this webview
-      // mid-form without losing anything, so every typing pause commits.
+      // Autosave: the draft exists so a mobile webview can suspend mid-form
+      // without losing anything, so every typing pause commits.
       let timer;
+      const save = async () => {
+        clearTimeout(timer);
+        try {
+          await api('PUT', `/api/e/${id}/text/${i}`, { text: ta.value });
+          setStatus('saved', true);
+        } catch (err) {
+          setStatus(err.message);
+          throw err;
+        }
+      };
       ta.addEventListener('input', () => {
         setStatus('saving…');
         clearTimeout(timer);
-        timer = setTimeout(async () => {
-          try {
-            await api('PUT', `/api/e/${id}/text/${i}`, { text: ta.value });
-            setStatus('saved', true);
-          } catch (err) {
-            setStatus(err.message);
-          }
-        }, 400);
+        timer = setTimeout(() => save().catch(() => {}), 400);
       });
+      ta._save = save;
     }
 
     rows.append(row);
@@ -492,6 +509,7 @@ function submitForm(id, e) {
     try {
       // Ask the server what actually landed rather than trusting the form:
       // autosave is debounced, so a field typed a moment ago may not be in yet.
+      await Promise.all([...form.querySelectorAll('textarea')].filter((t) => t._save).map((t) => t._save()));
       const fresh = await api('GET', `/api/e/${id}`);
       const blank = fresh.secrets.filter((s) => !s.text && !(s.files || []).length);
       if (blank.length) {
@@ -582,7 +600,7 @@ function revealed(got) {
         el(`<div class="item-group">${sec.files
           .map(
             (f) =>
-              `<a class="item" data-variant="outline" data-size="sm" href="${esc(f.url)}" download>
+              `<a class="item" data-variant="outline" data-size="sm" href="${esc(filePath(f.url))}" download>
                  <section><h3>${esc(f.filename)}</h3></section>
                  <aside class="size">${bytes(f.size)}</aside>
                </a>`

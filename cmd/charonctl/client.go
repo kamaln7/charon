@@ -132,6 +132,9 @@ func (c *client) submit(id string) error {
 }
 
 func (c *client) download(fileURL string) ([]byte, error) {
+	if !strings.HasPrefix(fileURL, c.base+"/") {
+		return nil, fmt.Errorf("file URL is not on this charon")
+	}
 	resp, err := c.http.Get(fileURL)
 	if err != nil {
 		return nil, err
@@ -140,7 +143,7 @@ func (c *client) download(fileURL string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download failed with HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 }
 
 // tokenOf extracts the entry id from one of the URLs charon hands back.

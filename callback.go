@@ -62,7 +62,7 @@ func (c Callback) Check(raw string) error {
 }
 
 // callbackKV publishes the URL's accessors as top-level rule fields, so a rule
-// reads `hostname == "hermes" and port == 9119`.
+// reads `hostname == "hooks.internal" and port == 8080`.
 func callbackKV(u *url.URL) rulekit.KV {
 	kv := rulekit.KV{
 		"url":      u.String(),
@@ -102,7 +102,7 @@ func urlPort(u *url.URL) int {
 // starts its self-destruct timer; if every attempt fails the entry is released
 // again, so a webhook that happened to be down does not destroy the secret.
 func (c Callback) Send(store *Store, baseURL string, e *Entry) {
-	secrets, err := store.Retrieve(e)
+	secrets, err := store.snapshot(e)
 	if err != nil {
 		return
 	}
@@ -120,6 +120,7 @@ func (c Callback) Send(store *Store, baseURL string, e *Entry) {
 			log.Printf("callback attempt %d/3 failed: %v", attempt+1, err)
 			continue
 		}
+		store.Retrieve(e)
 		return
 	}
 	log.Printf("callback gave up; the retrieve link remains valid")
@@ -139,9 +140,11 @@ func (c Callback) post(target string, body []byte) error {
 		// Timestamp and body are signed together so a receiver can reject both
 		// forgeries and replays.
 		ts := strconv.FormatInt(time.Now().Unix(), 10)
-		mac := hmacSHA256([]byte(c.Secret), append([]byte(ts+"."), body...))
+		mac := hmac.New(sha256.New, []byte(c.Secret))
+		mac.Write([]byte(ts + "."))
+		mac.Write(body)
 		req.Header.Set("X-Charon-Timestamp", ts)
-		req.Header.Set("X-Charon-Signature", "sha256="+hex.EncodeToString(mac))
+		req.Header.Set("X-Charon-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 	}
 
 	res, err := c.Client.Do(req)
@@ -153,10 +156,4 @@ func (c Callback) post(target string, body []byte) error {
 		return fmt.Errorf("status %d", res.StatusCode)
 	}
 	return nil
-}
-
-func hmacSHA256(key, msg []byte) []byte {
-	m := hmac.New(sha256.New, key)
-	m.Write(msg)
-	return m.Sum(nil)
 }

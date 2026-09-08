@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/url"
 	"strconv"
 	"time"
 )
@@ -90,6 +89,3 @@ func humanDuration(d time.Duration) string {
 		return d.String()
 	}
 }
-func urlEscape(s string) string { return url.PathEscape(s) }
-
-func sprintf(format string, args ...any) string { return fmt.Sprintf(format, args...) }

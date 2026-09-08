@@ -50,7 +50,15 @@ func receiptDir(handle string) (string, error) {
 	}
 	base := os.Getenv("CHARON_SCRATCH")
 	if base == "" {
-		base = os.TempDir()
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			base = os.TempDir()
+		} else {
+			base = filepath.Join(cache, "charonctl")
+			if err := os.MkdirAll(base, 0o700); err != nil {
+				return "", err
+			}
+		}
 	}
 	return filepath.Join(base, "charonctl-"+handle), nil
 }
@@ -106,23 +114,30 @@ func writeReceipt(c *client, dir string, payload api.RevealResponse) (*receipt, 
 		var blob []byte
 		switch {
 		case sec.Type == api.TypeFile && len(sec.Files) > 0:
-			if len(sec.Files) > 1 {
-				return nil, fmt.Errorf("secret %q came back with %d files; charonctl handles one", sec.Name, len(sec.Files))
+			for j, f := range sec.Files {
+				if blob, err = c.download(f.URL); err != nil {
+					return nil, fmt.Errorf("downloading %q: %w", sec.Name, err)
+				}
+				path := r.valuePath(i)
+				if j > 0 {
+					path += "." + strconv.Itoa(j)
+				}
+				if err := os.WriteFile(path, blob, 0o600); err != nil {
+					return nil, err
+				}
+				if j == 0 {
+					rs.Filename = f.Filename
+					rs.Size = int64(len(blob))
+				}
 			}
-			if blob, err = c.download(sec.Files[0].URL); err != nil {
-				return nil, fmt.Errorf("downloading %q: %w", sec.Name, err)
-			}
-			rs.Filename = sec.Files[0].Filename
 		case sec.Text != nil:
 			blob = []byte(*sec.Text)
-		default:
-			rs.Blank = true
-		}
-		if !rs.Blank {
 			rs.Size = int64(len(blob))
 			if err := os.WriteFile(r.valuePath(i), blob, 0o600); err != nil {
 				return nil, err
 			}
+		default:
+			rs.Blank = true
 		}
 		r.Secrets = append(r.Secrets, rs)
 	}

@@ -24,20 +24,36 @@ func LoadConfig() (Config, error) {
 		Addr:    env("CHARON_ADDR", ":1337"),
 		BaseURL: strings.TrimSuffix(env("CHARON_BASE_URL", "http://localhost:1337"), "/"),
 		Scratch: env("CHARON_SCRATCH_DIR", ""),
-		Limits: Limits{
-			MaxTextBytes:  envInt("CHARON_MAX_TEXT_BYTES", 64<<10),
-			MaxFileBytes:  envInt("CHARON_MAX_FILE_BYTES", 16<<20),
-			MaxFiles:      int(envInt("CHARON_MAX_FILES", 20)),
-			MaxSecrets:    int(envInt("CHARON_MAX_SECRETS", 20)),
-			MaxTotalBytes: envInt("CHARON_MAX_TOTAL_BYTES", 256<<20),
-		},
 		Callback: Callback{
 			Secret: env("CHARON_CALLBACK_SECRET", ""),
-			Client: &http.Client{Timeout: 15 * time.Second},
+			Client: &http.Client{
+				Timeout: 15 * time.Second,
+				CheckRedirect: func(*http.Request, []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			},
 		},
 	}
 
 	var err error
+	if c.Limits.MaxTextBytes, err = envInt("CHARON_MAX_TEXT_BYTES", 64<<10); err != nil {
+		return c, err
+	}
+	if c.Limits.MaxFileBytes, err = envInt("CHARON_MAX_FILE_BYTES", 16<<20); err != nil {
+		return c, err
+	}
+	var n int64
+	if n, err = envInt("CHARON_MAX_FILES", 20); err != nil {
+		return c, err
+	}
+	c.Limits.MaxFiles = int(n)
+	if n, err = envInt("CHARON_MAX_SECRETS", 20); err != nil {
+		return c, err
+	}
+	c.Limits.MaxSecrets = int(n)
+	if c.Limits.MaxTotalBytes, err = envInt("CHARON_MAX_TOTAL_BYTES", 256<<20); err != nil {
+		return c, err
+	}
 	if c.Limits.DefaultTTL, err = parseDuration(env("CHARON_DEFAULT_TTL", "24h")); err != nil {
 		return c, fmt.Errorf("CHARON_DEFAULT_TTL: %w", err)
 	}
@@ -67,16 +83,14 @@ func env(key, def string) string {
 	return def
 }
 
-// envInt reads a plain integer. Suffixed sizes would be nicer, but every value
-// here is set once in a Compose file and never typed again.
-func envInt(key string, def int64) int64 {
+func envInt(key string, def int64) (int64, error) {
 	v := os.Getenv(key)
 	if v == "" {
-		return def
+		return def, nil
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil || n <= 0 {
-		return def
+		return 0, fmt.Errorf("%s: want a positive integer, got %q", key, v)
 	}
-	return n
+	return n, nil
 }
