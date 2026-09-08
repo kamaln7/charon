@@ -78,13 +78,14 @@ func revealResponse(baseURL, title string, destructsAt time.Time, secrets []Secr
 
 func (c Config) configResponse() api.ConfigResponse {
 	return api.ConfigResponse{
-		MaxFileBytes:  c.Limits.MaxFileBytes,
-		MaxTextBytes:  c.Limits.MaxTextBytes,
-		MaxSecrets:    c.Limits.MaxSecrets,
-		TTLOptions:    c.Limits.TTLOptions(),
-		DefaultTTL:    c.Limits.DefaultTTLOption(),
-		LingerSeconds: int(c.Limits.Linger.Seconds()),
-		Callbacks:     c.Callback.Enabled(),
+		MaxFileBytes:   c.Limits.MaxFileBytes,
+		MaxTextBytes:   c.Limits.MaxTextBytes,
+		MaxSecrets:     c.Limits.MaxSecrets,
+		TTLOptions:     c.Limits.TTLOptions(),
+		DefaultTTL:     c.Limits.DefaultTTLOption(),
+		LingerSeconds:  int(c.Limits.Linger.Seconds()),
+		MaxWaitSeconds: int(maxWait.Seconds()),
+		Callbacks:      c.Callback.Enabled(),
 	}
 }
 

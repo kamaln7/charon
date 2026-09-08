@@ -58,13 +58,52 @@ func (s *server) create(kind api.Kind) handlerFunc {
 	}
 }
 
+// maxWait caps a long-poll so a proxy timeout, not the server, is never the
+// thing that decides how long a client blocks. Clients loop on shorter waits.
+const maxWait = 60 * time.Second
+
+// viewEntry doubles as the long-poll endpoint: with ?wait=30s it holds the
+// response until the entry is submitted, destroyed, or the wait elapses, then
+// answers exactly as it would have without the parameter. A poller therefore
+// needs no special handling of the wait path; it just gets answers sooner.
 func (s *server) viewEntry(w http.ResponseWriter, r *http.Request) error {
 	e, rl, err := s.entry(r)
 	if err != nil {
 		return err
 	}
+	wait, err := parseWait(r.URL.Query().Get("wait"))
+	if err != nil {
+		return err
+	}
+	if wait > 0 {
+		select {
+		case <-s.store.Done(e):
+		case <-time.After(wait):
+		case <-r.Context().Done():
+			return nil
+		}
+		// The wake-up may have been destruction rather than submission, in
+		// which case the entry is now a 404 like any other expired one.
+		if e, rl, err = s.entry(r); err != nil {
+			return err
+		}
+	}
 	writeJSON(w, http.StatusOK, s.cfg.entryResponse(e, rl))
 	return nil
+}
+
+// parseWait reads the optional long-poll duration. Anything past maxWait is
+// clamped rather than rejected: a client asking for "as long as you can" is
+// asking a reasonable question.
+func parseWait(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		return 0, errorf(http.StatusBadRequest, "wait must be a duration like 30s")
+	}
+	return min(d, maxWait), nil
 }
 
 func (s *server) setText(w http.ResponseWriter, r *http.Request) error {

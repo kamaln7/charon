@@ -60,6 +60,19 @@ type Entry struct {
 	minted     []Secret
 
 	bytes int64
+
+	// done is closed when there is nothing left to wait for: the entry was
+	// submitted, or it was destroyed. Long-polling viewers block on it.
+	done chan struct{}
+}
+
+// finish closes done exactly once. Callers hold the store lock.
+func (e *Entry) finish() {
+	select {
+	case <-e.done:
+	default:
+		close(e.done)
+	}
 }
 
 func (e *Entry) deadline(linger time.Duration) time.Time {
@@ -146,6 +159,9 @@ func NewID() string {
 func (s *Store) Put(e *Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if e.done == nil {
+		e.done = make(chan struct{})
+	}
 	s.byID[e.SubmitID] = ref{e, roleSubmit}
 	s.byID[e.RetrieveID] = ref{e, roleRetrieve}
 	s.byID[e.ManageID] = ref{e, roleManage}
@@ -186,7 +202,16 @@ func (s *Store) Submit(e *Entry) error {
 		return ErrFulfilled
 	}
 	e.Fulfilled = true
+	e.finish()
 	return nil
+}
+
+// Done reports when waiting on an entry is pointless: it fires on submission
+// and on destruction, so a viewer blocked on it wakes either way.
+func (s *Store) Done(e *Entry) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return e.done
 }
 
 // Retrieve hands back the payload. The first call starts the linger clock and
@@ -293,6 +318,7 @@ func (s *Store) destroy(e *Entry) []string {
 	delete(s.byID, e.SubmitID)
 	delete(s.byID, e.RetrieveID)
 	delete(s.byID, e.ManageID)
+	e.finish()
 	var paths []string
 	for _, sec := range e.Secrets {
 		for _, f := range sec.Files {

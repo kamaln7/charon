@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/kamaln7/charon/internal/api"
 )
@@ -251,4 +252,116 @@ func postFile(h http.Handler, path string) int {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 	return rec.Code
+}
+
+// ?wait= must return the moment the other side submits, not at the end of the
+// window; otherwise it is polling with extra steps.
+func TestViewWaitReturnsOnSubmit(t *testing.T) {
+	s := testServer(t)
+	h := s.Handler()
+	e := &Entry{
+		Kind: api.KindRequest, Title: "t",
+		Secrets:    []Secret{{Name: "one", Type: api.TypeText}},
+		SubmitID:   NewID(),
+		RetrieveID: NewID(),
+		ExpiresAt:  timeNowPlusHour(),
+	}
+	s.store.Put(e)
+
+	done := make(chan api.EntryResponse, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/e/"+e.RetrieveID+"?wait=10s", nil))
+		var got api.EntryResponse
+		json.Unmarshal(rec.Body.Bytes(), &got)
+		done <- got
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("wait returned before submission")
+	default:
+	}
+	s.store.Submit(e)
+	select {
+	case got := <-done:
+		if !got.Fulfilled {
+			t.Error("woke up but not fulfilled")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("wait did not return after submission")
+	}
+}
+
+// An unanswered wait ends at the requested window with the ordinary view, so
+// a client can simply loop. A bad value is a 400, and an oversized one is
+// clamped rather than refused.
+func TestViewWaitTimesOutAndValidates(t *testing.T) {
+	s := testServer(t)
+	h := s.Handler()
+	e := &Entry{
+		Kind: api.KindRequest, Title: "t",
+		Secrets:    []Secret{{Name: "one", Type: api.TypeText}},
+		SubmitID:   NewID(),
+		RetrieveID: NewID(),
+		ExpiresAt:  timeNowPlusHour(),
+	}
+	s.store.Put(e)
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/e/"+e.RetrieveID+"?wait=100ms", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if el := time.Since(start); el < 100*time.Millisecond || el > 2*time.Second {
+		t.Errorf("wait lasted %v, want about 100ms", el)
+	}
+	var got api.EntryResponse
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.Fulfilled {
+		t.Error("fulfilled without a submission")
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/e/"+e.RetrieveID+"?wait=soon", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad wait = %d, want 400", rec.Code)
+	}
+	if d, _ := parseWait("1h"); d != maxWait {
+		t.Errorf("wait=1h clamped to %v, want %v", d, maxWait)
+	}
+}
+
+// Destroying an entry must wake its waiters, or a sweep during a long poll
+// leaves a goroutine holding a connection until the window ends.
+func TestViewWaitWakesOnDestroy(t *testing.T) {
+	s := testServer(t)
+	h := s.Handler()
+	e := &Entry{
+		Kind: api.KindRequest, Title: "t",
+		Secrets:    []Secret{{Name: "one", Type: api.TypeText}},
+		SubmitID:   NewID(),
+		RetrieveID: NewID(),
+		ExpiresAt:  timeNowPlusHour(),
+	}
+	s.store.Put(e)
+
+	codes := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/e/"+e.RetrieveID+"?wait=10s", nil))
+		codes <- rec.Code
+	}()
+	time.Sleep(50 * time.Millisecond)
+	s.store.destroy(e)
+	select {
+	case code := <-codes:
+		if code != http.StatusNotFound {
+			t.Errorf("status after destroy = %d, want 404", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("wait did not return after destroy")
+	}
 }

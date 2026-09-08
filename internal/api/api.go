@@ -127,7 +127,9 @@ type ConfigResponse struct {
 	TTLOptions    []string `json:"ttl_options"`
 	DefaultTTL    string   `json:"default_ttl"`
 	LingerSeconds int      `json:"linger_seconds"`
-	Callbacks     bool     `json:"callbacks"`
+	// MaxWaitSeconds is the longest a GET /api/e/{id}?wait= will block.
+	MaxWaitSeconds int  `json:"max_wait_seconds"`
+	Callbacks      bool `json:"callbacks"`
 }
 
 type UploadResponse struct {

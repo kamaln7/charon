@@ -89,11 +89,14 @@ form renders one control per secret accordingly.
 }
 ```
 
-Then **poll `poll_url` until `fulfilled` is true** and `POST` the retrieve URL
-once:
+Then **wait on `poll_url` until `fulfilled` is true** and `POST` the retrieve
+URL once. `?wait=30s` turns the poll into a long poll: the response is held
+until the other side submits, the entry dies, or the window (capped at 60s,
+see `max_wait_seconds` in `/api/config`) elapses, then answers as a plain GET
+would. Loop on it instead of sleeping between requests.
 
 ```console
-curl https://secrets.example/api/e/<retrieve_id>            # {"fulfilled": false, ...}
+curl "https://secrets.example/api/e/<retrieve_id>?wait=30s"  # {"fulfilled": false, ...}
 curl -X POST https://secrets.example/api/e/<retrieve_id>/retrieve
 ```
 
@@ -122,7 +125,7 @@ until the entry self-destructs — an agent should not be handed a base64 blob.
 |---|---|
 | `POST /api/requests` | Create a request (you receive the answer) |
 | `POST /api/secrets` | Create a send (you provide the content) |
-| `GET /api/e/{id}` | View / poll. Draft values for a submit token, links for a manage token |
+| `GET /api/e/{id}` | View / poll; `?wait=30s` long-polls. Draft values for a submit token, links for a manage token |
 | `PUT /api/e/{id}/text/{idx}` | Autosave one field |
 | `POST /api/e/{id}/files/{idx}` | Upload a file to one secret (multipart) |
 | `DELETE /api/e/{id}/files/{idx}/{n}` | Remove a drafted file |
