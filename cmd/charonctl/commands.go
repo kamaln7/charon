@@ -78,13 +78,24 @@ func cmdAwait(c *client, stdout, stderr io.Writer, handle string, timeout time.D
 }
 
 func collect(c *client, handle string, timeout time.Duration) (*receipt, error) {
+	// A server without ?wait= answers immediately; looping on that would be a
+	// busy loop, so fall back to sleeping between plain polls.
+	cfg, err := c.config()
+	if err != nil {
+		return nil, err
+	}
+	wait := min(pollWait, time.Duration(cfg.MaxWaitSeconds)*time.Second)
+
 	deadline := time.Now().Add(timeout)
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return nil, fail(exitTimeout, "timed out after %s waiting for %s", timeout, handle)
 		}
-		view, err := c.view(handle, min(pollWait, remaining))
+		if wait == 0 {
+			time.Sleep(min(time.Second, remaining))
+		}
+		view, err := c.view(handle, min(wait, remaining))
 		var ae *apiError
 		if errors.As(err, &ae) && ae.status == 404 {
 			return nil, fail(exitTimeout, "request %s has expired or was already collected", handle)

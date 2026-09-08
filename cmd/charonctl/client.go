@@ -104,6 +104,12 @@ func (c *client) view(id string, wait time.Duration) (api.EntryResponse, error) 
 	return out, err
 }
 
+func (c *client) config() (api.ConfigResponse, error) {
+	var out api.ConfigResponse
+	err := c.do("GET", "/api/config", nil, "", &out)
+	return out, err
+}
+
 func (c *client) retrieve(id string) (api.RevealResponse, error) {
 	var out api.RevealResponse
 	err := c.do("POST", "/api/e/"+url.PathEscape(id)+"/retrieve", nil, "", &out)
