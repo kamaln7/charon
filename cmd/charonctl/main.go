@@ -3,15 +3,8 @@
 // Named charonctl, not charon: charon is the service this talks to, and having
 // both answer to one name made it impossible to say which one wrote a file.
 //
-//	charonctl request [--await] [--timeout 24h]      create a request for the user to fill in
-//	charonctl await [--timeout 24h] [--env] HANDLE   wait for it, collect it
-//	charonctl get [--to PATH] HANDLE NAME            read one collected value
-//	charonctl cleanup [--after 10m] HANDLE           remove the collected values
-//	charonctl send                                   hand over a secret you already have
-//
-// Secret values never reach stdout unless asked for with --env or get. Human
-// readable progress goes to stderr, so `eval "$(charonctl await H --env)"` is
-// safe and everything else stays legible in a transcript.
+// Secret values reach stdout only through await --env or get without --to.
+// Progress goes to stderr. Capture --env output before evaluating it in a shell.
 package main
 
 import (
@@ -55,75 +48,105 @@ func main() {
 
 const usage = `usage:
   charonctl request [--await] [--timeout 24h] [--cleanup-after 10m] < spec.json
-  charonctl await [--timeout 24h] [--env] [--cleanup-after 10m] HANDLE
-  charonctl get [--to PATH] [--mode 0600] HANDLE NAME
-  charonctl cleanup [--after 10m] HANDLE
+  charonctl await [--timeout 24h] [--env] [--cleanup-after 10m] --handle HANDLE
+  charonctl get [--to PATH] [--mode 0600] --handle HANDLE --name NAME
+  charonctl cleanup [--after 10m] --handle HANDLE
+  charonctl exec-env --handle HANDLE [--name NAME ...] -- COMMAND [ARG ...]
   charonctl send < spec.json
 
-Flags go before positional arguments.
+All operands use named flags; request and send read JSON from stdin.
 
-CHARON_API is the server (default http://localhost:1337).
+Server: CHARON_API overrides the optional JSON config's "api" field.
+Config: $XDG_CONFIG_HOME/charonctl/config.json (default ~/.config/charonctl/config.json).
+Without either, the server is http://localhost:1337.
 CHARON_SCRATCH is where collected values are kept (default the temp dir).`
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fail(exitError, "%s", usage)
 	}
-	c := newClient(os.Getenv("CHARON_API"))
 	verb, rest := args[0], args[1:]
+	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var handle, name, to, mode string
+	var names []string
+	var wait, env bool
+	var timeout, cleanup, after time.Duration
 	switch verb {
 	case "request":
-		fs := flag.NewFlagSet("request", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		wait := fs.Bool("await", false, "wait for the answer after printing the link")
-		timeout := fs.Duration("timeout", 24*time.Hour, "how long --await waits")
-		cleanup := fs.Duration("cleanup-after", 10*time.Minute, "when --await removes collected values")
-		if err := fs.Parse(rest); err != nil {
-			return err
-		}
-		return cmdRequest(c, stdin, stdout, stderr, *wait, *timeout, *cleanup)
+		fs.BoolVar(&wait, "await", false, "wait for the answer after printing the link")
+		fs.DurationVar(&timeout, "timeout", 24*time.Hour, "how long --await waits")
+		fs.DurationVar(&cleanup, "cleanup-after", 10*time.Minute, "when --await removes collected values")
 	case "await":
-		fs := flag.NewFlagSet("await", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		timeout := fs.Duration("timeout", 24*time.Hour, "give up after this long")
-		env := fs.Bool("env", false, "print export lines for eval")
-		cleanup := fs.Duration("cleanup-after", 10*time.Minute, "remove collected values after this long")
-		if err := fs.Parse(rest); err != nil {
-			return err
-		}
-		if fs.NArg() != 1 {
-			return fail(exitError, "await needs exactly one HANDLE")
-		}
-		return cmdAwait(c, stdout, stderr, fs.Arg(0), *timeout, *env, *cleanup)
+		fs.StringVar(&handle, "handle", "", "request handle (required)")
+		fs.DurationVar(&timeout, "timeout", 24*time.Hour, "give up after this long")
+		fs.BoolVar(&env, "env", false, "print shell-quoted export statements containing secrets; capture stdout for eval")
+		fs.DurationVar(&cleanup, "cleanup-after", 10*time.Minute, "remove collected values after this long")
 	case "get":
-		fs := flag.NewFlagSet("get", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		to := fs.String("to", "", "write the value to this path instead of stdout")
-		mode := fs.String("mode", "0600", "file mode for --to")
-		if err := fs.Parse(rest); err != nil {
-			return err
-		}
-		if fs.NArg() != 2 {
-			return fail(exitError, "get needs HANDLE and NAME")
-		}
-		return cmdGet(stdout, fs.Arg(0), fs.Arg(1), *to, *mode)
+		fs.StringVar(&handle, "handle", "", "request handle (required)")
+		fs.StringVar(&name, "name", "", "secret name (required)")
+		fs.StringVar(&to, "to", "", "write the value to this path instead of stdout")
+		fs.StringVar(&mode, "mode", "0600", "file mode for --to")
 	case "cleanup":
-		fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
-		fs.SetOutput(stderr)
-		after := fs.Duration("after", 0, "wait this long first")
-		if err := fs.Parse(rest); err != nil {
-			return err
-		}
-		if fs.NArg() != 1 {
-			return fail(exitError, "cleanup needs exactly one HANDLE")
-		}
-		return cmdCleanup(fs.Arg(0), *after)
+		fs.StringVar(&handle, "handle", "", "request handle (required)")
+		fs.DurationVar(&after, "after", 0, "wait this long first")
+	case "exec-env":
+		fs.StringVar(&handle, "handle", "", "request handle (required)")
+		fs.Func("name", "allow this secret (repeatable; default all)", func(value string) error {
+			if value == "" {
+				return fmt.Errorf("--name must not be empty")
+			}
+			names = append(names, value)
+			return nil
+		})
 	case "send":
-		return cmdSend(c, stdin, stdout)
 	case "-h", "--help", "help":
 		fmt.Fprintln(stdout, usage)
 		return nil
 	default:
 		return fail(exitError, "unknown command %q\n%s", verb, usage)
 	}
+	if err := fs.Parse(rest); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if verb != "exec-env" && fs.NArg() != 0 {
+		return fail(exitError, "%s accepts named flags only, no positional arguments", verb)
+	}
+	if verb == "await" || verb == "get" || verb == "cleanup" || verb == "exec-env" {
+		if handle == "" {
+			return fail(exitError, "%s requires --handle", verb)
+		}
+	}
+	if verb == "get" && name == "" {
+		return fail(exitError, "get requires --name")
+	}
+	if verb == "exec-env" && fs.NArg() == 0 {
+		return fail(exitError, "exec-env requires a command after --")
+	}
+	var c *client
+	if verb == "request" || verb == "await" || verb == "send" {
+		base, err := serverConfig()
+		if err != nil {
+			return err
+		}
+		c = newClient(base)
+	}
+	switch verb {
+	case "request":
+		return cmdRequest(c, stdin, stdout, stderr, wait, timeout, cleanup)
+	case "await":
+		return cmdAwait(c, stdout, stderr, handle, timeout, env, cleanup)
+	case "get":
+		return cmdGet(stdout, handle, name, to, mode)
+	case "cleanup":
+		return cmdCleanup(handle, after)
+	case "exec-env":
+		return cmdExecEnv(handle, names, fs.Args())
+	case "send":
+		return cmdSend(c, stdin, stdout)
+	}
+	return nil
 }

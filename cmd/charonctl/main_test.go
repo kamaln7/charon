@@ -65,6 +65,7 @@ func testMain(m *testing.M) int {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
 	os.Setenv("CHARON_SCRATCH", filepath.Join(tmp, "receipts"))
 	os.MkdirAll(os.Getenv("CHARON_SCRATCH"), 0o700)
 	return m.Run()
@@ -108,7 +109,15 @@ func fillAndSubmit(t *testing.T, submitURL string, text map[int]string, files ma
 }
 
 func TestRequestAwaitGetCleanup(t *testing.T) {
-	t.Setenv("CHARON_API", serverURL)
+	t.Setenv("CHARON_API", "")
+	configDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+	if err := os.MkdirAll(filepath.Join(configDir, "charonctl"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "charonctl", "config.json"), []byte(`{"api":"`+serverURL+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	spec := `{"title":"deploy creds","secrets":[
 		{"name":"DO_TOKEN","description":"rw"},
 		{"name":"DEPLOY_KEY","type":"file"},
@@ -130,7 +139,7 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 	}()
 
 	start := time.Now()
-	stdout, stderr, err := runCtl(t, "", "await", "--timeout", "10s", "--env", "--cleanup-after", "0", handle)
+	stdout, stderr, err := runCtl(t, "", "await", "--timeout", "10s", "--env", "--cleanup-after", "0", "--handle", handle)
 	if err != nil {
 		t.Fatal(err, stderr)
 	}
@@ -163,36 +172,36 @@ func TestRequestAwaitGetCleanup(t *testing.T) {
 
 	// A second await answers from the receipt, even though charon has now
 	// consumed the entry.
-	stdout2, _, err := runCtl(t, "", "await", "--env", "--cleanup-after", "0", handle)
+	stdout2, _, err := runCtl(t, "", "await", "--env", "--cleanup-after", "0", "--handle", handle)
 	if err != nil || stdout2 != stdout {
 		t.Errorf("second await: err=%v, same output=%v", err, stdout2 == stdout)
 	}
 
 	// get: to stdout, to a file with a mode, and blank as its own exit code.
-	got, _, err := runCtl(t, "", "get", handle, "DO_TOKEN")
+	got, _, err := runCtl(t, "", "get", "--handle", handle, "--name", "DO_TOKEN")
 	if err != nil || got != token {
 		t.Errorf("get DO_TOKEN = %q, %v", got, err)
 	}
 	keyPath := filepath.Join(t.TempDir(), "k")
-	if _, _, err := runCtl(t, "", "get", "--to", keyPath, "--mode", "0400", handle, "DEPLOY_KEY"); err != nil {
+	if _, _, err := runCtl(t, "", "get", "--to", keyPath, "--mode", "0400", "--handle", handle, "--name", "DEPLOY_KEY"); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := os.Stat(keyPath); st.Mode().Perm() != 0o400 {
 		t.Errorf("--mode 0400 gave %v", st.Mode().Perm())
 	}
-	_, _, err = runCtl(t, "", "get", handle, "OPTIONAL_NOTE")
+	_, _, err = runCtl(t, "", "get", "--handle", handle, "--name", "OPTIONAL_NOTE")
 	var ec exitCode
 	if !errors.As(err, &ec) || ec.code != exitBlank {
 		t.Errorf("get on a blank field: err=%v, want exit %d", err, exitBlank)
 	}
 
-	if _, _, err := runCtl(t, "", "cleanup", handle); err != nil {
+	if _, _, err := runCtl(t, "", "cleanup", "--handle", handle); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadReceipt(handle); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("receipt survived cleanup: %v", err)
 	}
-	_, _, err = runCtl(t, "", "get", handle, "DO_TOKEN")
+	_, _, err = runCtl(t, "", "get", "--handle", handle, "--name", "DO_TOKEN")
 	if !errors.As(err, &ec) || ec.code != exitTimeout {
 		t.Errorf("get after cleanup: err=%v, want exit %d", err, exitTimeout)
 	}
@@ -230,12 +239,12 @@ func TestAwaitTimeoutAndExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = runCtl(t, "", "await", "--timeout", "300ms", line(out, "HANDLE"))
+	_, _, err = runCtl(t, "", "await", "--timeout", "300ms", "--handle", line(out, "HANDLE"))
 	var ec exitCode
 	if !errors.As(err, &ec) || ec.code != exitTimeout {
 		t.Errorf("timeout: err=%v, want exit %d", err, exitTimeout)
 	}
-	_, _, err = runCtl(t, "", "await", "--timeout", "1s", "aaaaaaaaaaaaaaaaaaaaaaaa")
+	_, _, err = runCtl(t, "", "await", "--timeout", "1s", "--handle", "aaaaaaaaaaaaaaaaaaaaaaaa")
 	if !errors.As(err, &ec) || ec.code != exitTimeout {
 		t.Errorf("unknown handle: err=%v, want exit %d", err, exitTimeout)
 	}
@@ -314,5 +323,124 @@ func TestHandleShape(t *testing.T) {
 		if _, err := receiptDir(bad); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func TestServerConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, override, want string
+		bad                        bool
+	}{
+		{name: "missing", want: "http://localhost:1337"},
+		{name: "empty object", body: `{}`, want: "http://localhost:1337"},
+		{name: "configured", body: `{"api":"https://config.example"}`, want: "https://config.example"},
+		{name: "override", body: `{"api":"https://config.example"}`, override: "https://env.example", want: "https://env.example"},
+		{name: "env only", override: "https://env.example", want: "https://env.example"},
+		{name: "unknown field", body: `{"aip":"typo"}`, bad: true},
+		{name: "malformed", body: `{`, bad: true},
+		{name: "wrong type", body: `{"api":42}`, bad: true},
+		{name: "null", body: `null`, bad: true},
+		{name: "trailing JSON", body: `{} {}`, bad: true},
+		{name: "trailing garbage", body: `{} !`, bad: true},
+		{name: "override does not hide errors", body: `{`, override: "https://env.example", bad: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CHARON_API", tc.override)
+			dir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			if tc.body != "" {
+				if err := os.Mkdir(filepath.Join(dir, "charonctl"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "charonctl", "config.json"), []byte(tc.body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			base, err := serverConfig()
+			if (err != nil) != tc.bad {
+				t.Fatalf("error = %v, want error %v", err, tc.bad)
+			}
+			if !tc.bad && newClient(base).base != tc.want {
+				t.Fatalf("server = %q, want %q", newClient(base).base, tc.want)
+			}
+		})
+	}
+	t.Run("home fallback", func(t *testing.T) {
+		t.Setenv("CHARON_API", "")
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		dir := filepath.Join(home, ".config", "charonctl")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"api":"https://home.example"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, xdg := range []string{"", "relative/path"} {
+			t.Setenv("XDG_CONFIG_HOME", xdg)
+			base, err := serverConfig()
+			if err != nil || base != "https://home.example" {
+				t.Fatalf("XDG=%q: base=%q, err=%v", xdg, base, err)
+			}
+		}
+	})
+}
+
+func TestCLIFlags(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"await"}, "requires --handle"},
+		{[]string{"get", "--name", "TOKEN"}, "requires --handle"},
+		{[]string{"get", "--handle", "aaaaaaaaaaaaaaaaaaaaaaaa"}, "requires --name"},
+		{[]string{"cleanup"}, "requires --handle"},
+	} {
+		_, _, err := runCtl(t, "", tc.args...)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v: %v, want %q", tc.args, err, tc.want)
+		}
+	}
+	for _, verb := range []string{"request", "await", "get", "cleanup", "send"} {
+		for _, arg := range []string{"unexpected", "--unknown"} {
+			if _, _, err := runCtl(t, `{}`, verb, arg); err == nil {
+				t.Errorf("%s accepted %s", verb, arg)
+			}
+		}
+		if _, _, err := runCtl(t, "", verb, "--help"); err != nil {
+			t.Errorf("%s help: %v", verb, err)
+		}
+	}
+}
+
+func TestAutomaticCleanup(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "charonctl")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, out)
+	}
+	t.Setenv("CHARON_API", serverURL)
+	out, _, err := runCtl(t, `{"secrets":[{"name":"TOKEN"}]}`, "request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := line(out, "HANDLE")
+	fillAndSubmit(t, line(out, "LINK"), map[int]string{0: "test value"}, nil)
+	cmd := exec.Command(bin, "await", "--handle", handle, "--timeout", "5s", "--cleanup-after", "200ms")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("await: %v: %s", err, out)
+	}
+	if _, err := loadReceipt(handle); err != nil {
+		t.Fatalf("receipt not created: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, err := loadReceipt(handle)
+		if errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if err != nil || time.Now().After(deadline) {
+			t.Fatalf("automatic cleanup did not remove receipt: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

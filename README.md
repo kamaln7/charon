@@ -137,7 +137,20 @@ until the entry self-destructs — an agent should not be handed a base64 blob.
 
 `cmd/charonctl` is the client an agent runs so it never has to touch the API
 or see a secret. Install it with `go install github.com/kamaln7/charon/cmd/charonctl@latest`
-and point it at your server with `CHARON_API`.
+and configure your server in `$XDG_CONFIG_HOME/charonctl/config.json` (default
+`~/.config/charonctl/config.json`, also on macOS):
+
+```json
+{"api":"https://secrets.example"}
+```
+
+`CHARON_API` overrides `api`; without either, the server defaults to
+`http://localhost:1337`. A missing config is fine; unreadable or malformed
+config files are errors, including unknown fields and trailing JSON.
+Relative `XDG_CONFIG_HOME` values are ignored. `get`, `cleanup`, `exec-env`, and help
+work without reading the server config.
+
+Operands use named flags. `request` and `send` read their JSON spec from stdin.
 
 ```console
 $ echo '{"secrets":[{"name":"DO_TOKEN"},{"name":"DEPLOY_KEY","type":"file"}]}' \
@@ -146,14 +159,16 @@ LINK https://secrets.example/e/fwlascooqxofa2ekujikwweq
 EXPIRES 2026-09-04T13:59:51Z
 HANDLE po3nkmdgisdb5veespq6hfph
 
-$ eval "$(charonctl await --env po3nkmdgisdb5veespq6hfph)"
+$ charon_exports=$(charonctl await --env --handle po3nkmdgisdb5veespq6hfph) || exit "$?"
 collected "quiet-otter"
 set DO_TOKEN (71 chars)
 file DEPLOY_KEY (id_ed25519, 411 bytes)
 receipt /tmp/charonctl-po3nkmdgisdb5veespq6hfph
+$ eval "$charon_exports"
+$ unset charon_exports
 
-$ charonctl get --to ~/.ssh/deploy --mode 0600 po3nkmdgisdb5veespq6hfph DEPLOY_KEY
-$ charonctl cleanup po3nkmdgisdb5veespq6hfph
+$ charonctl get --to ~/.ssh/deploy --mode 0600 --handle po3nkmdgisdb5veespq6hfph --name DEPLOY_KEY
+$ charonctl cleanup --handle po3nkmdgisdb5veespq6hfph
 ```
 
 - `request` takes the same JSON as `POST /api/requests`, defaults the TTL to
@@ -167,6 +182,15 @@ $ charonctl cleanup po3nkmdgisdb5veespq6hfph
   `--cleanup-after` (default 10m) by a detached copy of the process.
 - `get` reads one value, to stdout or to a path. Exit code 3 means the user
   left it blank.
+- `exec-env --handle HANDLE [--name NAME ...] -- COMMAND [ARG ...]` runs a
+  command with collected secrets in its environment, without shell evaluation.
+  Repeat `--name` to allowlist receipt field names; omit it to select all.
+  Text becomes `NAME`, files become `NAME_FILE` pointing into the receipt.
+  Selected values override inherited variables; other inherited variables stay.
+  This selects receipt secrets, not an isolated environment. Unknown names,
+  skipped fields, NUL text, and colliding variable names fail before execution.
+  Receipt expiry is unchanged; copy files with `get --to` if needed longer.
+  On Unix the command replaces charonctl, preserving signals and exit status.
 - `send` takes `{"secrets":[{"name":..,"text":..}|{"name":..,"file":path}]}`,
   fills the entry, and prints the retrieve link.
 - Exit codes: 0 fine, 1 error, 2 timed out or expired, 3 blank.
