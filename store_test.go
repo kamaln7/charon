@@ -3,6 +3,8 @@ package main
 import (
 	"testing"
 	"time"
+
+	"github.com/kamaln7/charon/internal/api"
 )
 
 func testLimits() Limits {
@@ -22,9 +24,9 @@ func timeNowPlusHour() time.Time { return time.Now().Add(time.Hour) }
 
 func newTestEntry(s *Store, ttl time.Duration) *Entry {
 	e := &Entry{
-		Kind:       KindRequest,
+		Kind:       api.KindRequest,
 		Title:      "t",
-		Secrets:    []Secret{{Name: "one", Type: TypeText}},
+		Secrets:    []Secret{{Name: "one", Type: api.TypeText}},
 		SubmitID:   NewID(),
 		RetrieveID: NewID(),
 		ExpiresAt:  time.Now().Add(ttl),

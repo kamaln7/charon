@@ -7,24 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
-)
 
-// Kind is cosmetic: it tells the frontend which side of the link the visitor is
-// on. Both modes are the same machine underneath — an entry with a submit token
-// and a retrieve token. In request mode you hand out the submit link; in send
-// mode you fill it in yourself and hand out the retrieve link.
-type Kind string
-
-const (
-	KindSend    Kind = "send"
-	KindRequest Kind = "request"
-)
-
-type SecretType string
-
-const (
-	TypeText SecretType = "text"
-	TypeFile SecretType = "file"
+	"github.com/kamaln7/charon/internal/api"
 )
 
 var (
@@ -40,7 +24,7 @@ var (
 type Secret struct {
 	Name        string
 	Description string
-	Type        SecretType
+	Type        api.SecretType
 
 	Text  string
 	Files []File
@@ -56,7 +40,7 @@ type File struct {
 func (f File) Open() (*os.File, error) { return os.Open(f.path) }
 
 type Entry struct {
-	Kind        Kind
+	Kind        api.Kind
 	Title       string
 	Description string
 	Secrets     []Secret

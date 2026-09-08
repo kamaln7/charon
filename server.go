@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+
+	"github.com/kamaln7/charon/internal/api"
 )
 
 type server struct {
@@ -37,20 +39,20 @@ func newServer(cfg Config, store *Store, scratch *Scratch, web fs.FS) (*server, 
 // credential, and charon is meant to sit on a trusted network or behind a
 // proxy that authenticates.
 func (s *server) Handler() http.Handler {
-	api := http.NewServeMux()
-	api.Handle("GET /api/config", s.handle(s.getConfig))
-	api.Handle("POST /api/requests", s.handle(s.create(KindRequest)))
-	api.Handle("POST /api/secrets", s.handle(s.create(KindSend)))
-	api.Handle("GET /api/e/{id}", s.handle(s.viewEntry))
-	api.Handle("PUT /api/e/{id}/text/{idx}", s.handle(s.setText))
-	api.Handle("POST /api/e/{id}/files/{idx}", s.handle(s.addFile))
-	api.Handle("DELETE /api/e/{id}/files/{idx}/{n}", s.handle(s.dropFile))
-	api.Handle("POST /api/e/{id}/submit", s.handle(s.submitEntry))
-	api.Handle("POST /api/e/{id}/retrieve", s.handle(s.retrieveEntry))
-	api.Handle("GET /api/f/{token}", s.handle(s.downloadFile))
+	apiMux := http.NewServeMux()
+	apiMux.Handle("GET /api/config", s.handle(s.getConfig))
+	apiMux.Handle("POST /api/requests", s.handle(s.create(api.KindRequest)))
+	apiMux.Handle("POST /api/secrets", s.handle(s.create(api.KindSend)))
+	apiMux.Handle("GET /api/e/{id}", s.handle(s.viewEntry))
+	apiMux.Handle("PUT /api/e/{id}/text/{idx}", s.handle(s.setText))
+	apiMux.Handle("POST /api/e/{id}/files/{idx}", s.handle(s.addFile))
+	apiMux.Handle("DELETE /api/e/{id}/files/{idx}/{n}", s.handle(s.dropFile))
+	apiMux.Handle("POST /api/e/{id}/submit", s.handle(s.submitEntry))
+	apiMux.Handle("POST /api/e/{id}/retrieve", s.handle(s.retrieveEntry))
+	apiMux.Handle("GET /api/f/{token}", s.handle(s.downloadFile))
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/", api)
+	mux.Handle("/api/", apiMux)
 	// /e/<id> is a client-side route, so it serves the app shell rather than a
 	// 404. Everything else falls through to the embedded assets.
 	mux.HandleFunc("GET /e/{id}", s.serveIndex)
@@ -100,10 +102,10 @@ var errNotFound = statusError{code: http.StatusNotFound, msg: "not found"}
 func writeError(w http.ResponseWriter, err error) {
 	var se statusError
 	if errors.As(err, &se) {
-		writeJSON(w, se.code, ErrorResponse{Error: se.msg})
+		writeJSON(w, se.code, api.ErrorResponse{Error: se.msg})
 		return
 	}
-	writeJSON(w, statusFor(err), ErrorResponse{Error: err.Error()})
+	writeJSON(w, statusFor(err), api.ErrorResponse{Error: err.Error()})
 }
 
 // statusFor maps the store's sentinel errors onto HTTP.
@@ -174,7 +176,7 @@ func recoverPanics(next http.Handler) http.Handler {
 				panic(rec)
 			}
 			log.Printf("panic: %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
-			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "internal error"})
+			writeJSON(w, http.StatusInternalServerError, api.ErrorResponse{Error: "internal error"})
 		}()
 		next.ServeHTTP(w, r)
 	})

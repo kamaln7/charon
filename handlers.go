@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kamaln7/charon/internal/api"
 )
 
 const (
@@ -31,9 +33,9 @@ func (s *server) getConfig(w http.ResponseWriter, r *http.Request) error {
 
 // create builds an entry in either mode. The only difference is which of the
 // two links you keep and which you hand out.
-func (s *server) create(kind Kind) handlerFunc {
+func (s *server) create(kind api.Kind) handlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		var req CreateRequest
+		var req api.CreateRequest
 		if err := decodeJSON(w, r, &req); err != nil {
 			return err
 		}
@@ -66,11 +68,11 @@ func (s *server) viewEntry(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *server) setText(w http.ResponseWriter, r *http.Request) error {
-	e, idx, err := s.draftTarget(r, TypeText)
+	e, idx, err := s.draftTarget(r, api.TypeText)
 	if err != nil {
 		return err
 	}
-	var req SetTextRequest
+	var req api.SetTextRequest
 	if err := decodeJSON(w, r, &req); err != nil {
 		return err
 	}
@@ -85,7 +87,7 @@ func (s *server) setText(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *server) addFile(w http.ResponseWriter, r *http.Request) error {
-	e, idx, err := s.draftTarget(r, TypeFile)
+	e, idx, err := s.draftTarget(r, api.TypeFile)
 	if err != nil {
 		return err
 	}
@@ -110,12 +112,12 @@ func (s *server) addFile(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	s.store.AddFile(e, idx, f)
-	writeJSON(w, http.StatusOK, UploadResponse{Name: f.Name, Size: f.Size})
+	writeJSON(w, http.StatusOK, api.UploadResponse{Name: f.Name, Size: f.Size})
 	return nil
 }
 
 func (s *server) dropFile(w http.ResponseWriter, r *http.Request) error {
-	e, idx, err := s.draftTarget(r, TypeFile)
+	e, idx, err := s.draftTarget(r, api.TypeFile)
 	if err != nil {
 		return err
 	}
@@ -143,7 +145,7 @@ func (s *server) submitEntry(w http.ResponseWriter, r *http.Request) error {
 	if e.CallbackURL != "" {
 		go s.cfg.Callback.Send(s.store, s.cfg.BaseURL, e)
 	}
-	writeJSON(w, http.StatusOK, OKResponse{OK: true})
+	writeJSON(w, http.StatusOK, api.OKResponse{OK: true})
 	return nil
 }
 
@@ -209,7 +211,7 @@ func (s *server) entryAs(r *http.Request, want role) (*Entry, error) {
 // draftTarget resolves the preconditions every draft-editing route shares: a
 // valid submit token, an unsubmitted entry, an in-range secret index, and a
 // secret whose declared type matches the route being used.
-func (s *server) draftTarget(r *http.Request, want SecretType) (*Entry, int, error) {
+func (s *server) draftTarget(r *http.Request, want api.SecretType) (*Entry, int, error) {
 	e, err := s.entryAs(r, roleSubmit)
 	if err != nil {
 		return nil, 0, err
@@ -233,7 +235,7 @@ func (s *server) draftTarget(r *http.Request, want SecretType) (*Entry, int, err
 // newEntry fills in everything the caller left out. Only the secrets list is
 // genuinely required: a missing title becomes a generated two-word name, and
 // unnamed secrets are numbered in order.
-func (s *server) newEntry(kind Kind, req CreateRequest) (*Entry, error) {
+func (s *server) newEntry(kind api.Kind, req api.CreateRequest) (*Entry, error) {
 	limits := s.cfg.Limits
 	if len(req.Secrets) == 0 {
 		return nil, errorf(http.StatusBadRequest, "at least one secret is required")
@@ -277,11 +279,11 @@ func (s *server) newEntry(kind Kind, req CreateRequest) (*Entry, error) {
 		typ := spec.Type
 		switch typ {
 		case "":
-			typ = TypeText
-		case TypeText, TypeFile:
+			typ = api.TypeText
+		case api.TypeText, api.TypeFile:
 		default:
 			return nil, errorf(http.StatusBadRequest,
-				"secrets[%d].type %q must be %q or %q", i, typ, TypeText, TypeFile)
+				"secrets[%d].type %q must be %q or %q", i, typ, api.TypeText, api.TypeFile)
 		}
 		name := strings.TrimSpace(spec.Name)
 		if name == "" {

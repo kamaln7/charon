@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kamaln7/charon/internal/api"
 	rulekit "github.com/qpoint-io/rulekit/v2"
 )
 
@@ -38,13 +39,13 @@ func LoadConfig() (Config, error) {
 	}
 
 	var err error
-	if c.Limits.DefaultTTL, err = parseDuration(env("CHARON_DEFAULT_TTL", "24h")); err != nil {
+	if c.Limits.DefaultTTL, err = api.ParseDuration(env("CHARON_DEFAULT_TTL", "24h")); err != nil {
 		return c, fmt.Errorf("CHARON_DEFAULT_TTL: %w", err)
 	}
-	if c.Limits.MaxTTL, err = parseDuration(env("CHARON_MAX_TTL", "7d")); err != nil {
+	if c.Limits.MaxTTL, err = api.ParseDuration(env("CHARON_MAX_TTL", "7d")); err != nil {
 		return c, fmt.Errorf("CHARON_MAX_TTL: %w", err)
 	}
-	if c.Limits.Linger, err = parseDuration(env("CHARON_LINGER", "60s")); err != nil {
+	if c.Limits.Linger, err = api.ParseDuration(env("CHARON_LINGER", "60s")); err != nil {
 		return c, fmt.Errorf("CHARON_LINGER: %w", err)
 	}
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/kamaln7/charon/internal/api"
 )
 
 func testServer(t *testing.T) *server {
@@ -95,8 +97,8 @@ func TestSubmitTokenCannotRetrieve(t *testing.T) {
 	s := testServer(t)
 	h := s.Handler()
 	e := &Entry{
-		Kind: KindRequest, Title: "t",
-		Secrets:    []Secret{{Name: "one", Type: TypeText}},
+		Kind: api.KindRequest, Title: "t",
+		Secrets:    []Secret{{Name: "one", Type: api.TypeText}},
 		SubmitID:   NewID(),
 		RetrieveID: NewID(),
 		ExpiresAt:  timeNowPlusHour(),
@@ -124,8 +126,8 @@ func TestManageTokenIsReadOnly(t *testing.T) {
 	s := testServer(t)
 	h := s.Handler()
 	e := &Entry{
-		Kind: KindRequest, Title: "t",
-		Secrets:    []Secret{{Name: "one", Type: TypeText}},
+		Kind: api.KindRequest, Title: "t",
+		Secrets:    []Secret{{Name: "one", Type: api.TypeText}},
 		SubmitID:   NewID(),
 		RetrieveID: NewID(),
 		ManageID:   NewID(),
@@ -138,7 +140,7 @@ func TestManageTokenIsReadOnly(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("manage view: status %d, want 200", rec.Code)
 	}
-	var got EntryResponse
+	var got api.EntryResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -173,8 +175,8 @@ func TestSecretTypeIsEnforced(t *testing.T) {
 	s := testServer(t)
 	h := s.Handler()
 	e := &Entry{
-		Kind: KindRequest, Title: "t",
-		Secrets:    []Secret{{Name: "tok", Type: TypeText}, {Name: "key", Type: TypeFile}},
+		Kind: api.KindRequest, Title: "t",
+		Secrets:    []Secret{{Name: "tok", Type: api.TypeText}, {Name: "key", Type: api.TypeFile}},
 		SubmitID:   NewID(),
 		RetrieveID: NewID(),
 		ManageID:   NewID(),
